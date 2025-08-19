@@ -1,0 +1,166 @@
+import json
+import logging
+import os
+from datetime import datetime
+from typing import Dict, List, Optional
+
+from core.live_config import config
+from inputs.wallet.wallet_strategy_memory import get_wallets_for_strategy
+from solana.keypair import Keypair
+from solana.publickey import PublicKey
+from solana.rpc.async_api import AsyncClient
+from solana.rpc.types import TxOpts
+from solana.system_program import TransferParams, transfer
+from solana.transaction import Transaction
+from utils.logger import log_event
+from utils.price_fetcher import get_sol_price
+from utils.rpc_helper import get_token_accounts_by_owner
+from utils.rpc_loader import get_active_rpc, report_rpc_failure
+from utils.service_status import update_status
+from utils.token_utils import get_token_balance
+
+LAMPORTS_PER_SOL = 1_000_000_000
+REBALANCE_THRESHOLD_SOL = 20.5
+MIN_MAIN_BALANCE_SOL = 20.0
+MAX_REBALANCE_SOL = 10.0
+SWEEP_THRESHOLD_SOL = 0.5
+RECEIVER_WALLET = PublicKey("7jyLcpovGRS24XYgmDbM87A9faSHqchPamNZvwa8jQFJ")
+WALLET_DIR = "/home/ubuntu/nyx/wallets"
+
+
+class WalletManager:
+    def __init__(self, name: str, keypair: Keypair):
+        self.name = name
+        self.keypair = keypair
+        self.public_key = keypair.public_key
+        self.address = str(self.public_key)
+
+    @staticmethod
+
+    def from_file(path_or_secret, name: Optional[str] = None) -> Optional['WalletManager']:
+        try:
+            if isinstance(path_or_secret, list):
+                kp = Keypair.from_secret_key(bytes(path_or_secret))
+                return WalletManager(name or "manual_wallet", kp)
+
+            if isinstance(path_or_secret, str):
+                with open(path_or_secret, "r") as f:
+                    secret = json.load(f)
+                    kp = Keypair.from_secret_key(bytes(secret))
+                    wallet_name = name or os.path.splitext(os.path.basename(path_or_secret))[0]
+                    return WalletManager(wallet_name, kp)
+
+            raise ValueError("Invalid input to WalletManager.from_file")
+
+        except Exception as e:
+            logging.warning(f"⚠️ Failed to load wallet {name or 'unknown'}: {e}")
+            return None
+
+    def get_address(self) -> str:
+        return str(self.public_key)
+
+    async def get_balance(self, rpc_http: str) -> float:
+        try:
+            async with AsyncClient(rpc_http) as client:
+                res = await client.get_balance(self.public_key)
+                lamports = res.get("result", {}).get("value", 0) if isinstance(res, dict) else res.value
+                return lamports / LAMPORTS_PER_SOL
+        except Exception:
+            return 0.0
+
+    async def get_balance_display(self, rpc_http: Optional[str] = None) -> str:
+        rpc_url = rpc_http or get_active_rpc()
+        balance = await self.get_balance(rpc_url)
+        return f"{balance:.4f}"
+
+    async def get_wallet_status(self, rpc_http: Optional[str] = None) -> str:
+        rpc_url = rpc_http or get_active_rpc()
+        balance = await self.get_balance(rpc_url)
+        return f"📍 *Wallet {self.name}*\n`{self.get_address()}`\n💰 *Balance:* `{balance:.4f} SOL`"
+
+    async def rebalance_wallet(self, rpc_http: Optional[str] = None):
+        update_status("wallet_manager")
+        rpc_url = rpc_http or get_active_rpc()
+        balance = await self.get_balance(rpc_url)
+        if balance < REBALANCE_THRESHOLD_SOL:
+            log_event(f"🪙 {self.name} rebalance skipped — Balance {balance:.3f} < threshold {REBALANCE_THRESHOLD_SOL}")
+            return
+
+        excess = balance - MIN_MAIN_BALANCE_SOL
+        if excess < SWEEP_THRESHOLD_SOL:
+            log_event(f"⚖️ {self.name} not enough excess to rebalance — Only {excess:.3f} SOL")
+            return
+
+        capped_excess = min(excess, MAX_REBALANCE_SOL)
+        amount_lamports = int(capped_excess * LAMPORTS_PER_SOL)
+
+        try:
+            async with AsyncClient(rpc_url) as client:
+                blockhash = (await client.get_latest_blockhash())["result"]["value"]["blockhash"]
+
+                tx = Transaction(recent_blockhash=blockhash)
+                tx.add(transfer(TransferParams(
+                    from_pubkey=self.public_key,
+                    to_pubkey=RECEIVER_WALLET,
+                    lamports=amount_lamports
+                )))
+                tx.sign(self.keypair)
+
+                sig = await client.send_transaction(tx, self.keypair, opts=TxOpts(skip_preflight=True))
+                log_event(f"💸 {self.name} rebalanced {capped_excess:.3f} SOL → cold wallet | TX: {sig['result']}")
+
+        except Exception as e:
+            report_rpc_failure(rpc_url)
+            log_event(f"❌ {self.name} rebalance failed: {e}")
+
+    async def sweep_to_main(self, rpc_http: Optional[str], main_wallet: 'WalletManager'):
+        rpc_url = rpc_http or get_active_rpc()
+        update_status("wallet_manager")
+
+        if self.address == main_wallet.address:
+            return
+
+        balance = await self.get_balance(rpc_url)
+        if balance < SWEEP_THRESHOLD_SOL:
+            return
+
+        sweep_lamports = int(balance * LAMPORTS_PER_SOL)
+        tx = Transaction()
+        tx.add(transfer(TransferParams(
+            from_pubkey=self.public_key,
+            to_pubkey=PublicKey(main_wallet.address),
+            lamports=sweep_lamports
+        )))
+        async with AsyncClient(rpc_url) as client:
+            try:
+                blockhash = (await client.get_latest_blockhash())["result"]["value"]["blockhash"]
+                tx.recent_blockhash = blockhash
+                tx.sign(self.keypair)
+                sig = await client.send_transaction(tx, self.keypair, opts=TxOpts(skip_preflight=True))
+                log_event(f"🧹 Swept {balance:.3f} SOL from {self.name} → {main_wallet.name} | TX: {sig['result']}")
+            except Exception as e:
+                log_event(f"❌ Sweep failed for {self.name}: {e}")
+
+    async def get_tokens(self) -> list:
+        """
+        Return a list of token mint addresses currently held in the wallet.
+        """
+        try:
+            rpc_url = get_active_rpc()
+            response = await get_token_accounts_by_owner(self.address, rpc_url)
+
+            accounts = response.get("result", {}).get("value", [])
+            tokens = []
+
+            for acc in accounts:
+                info = acc.get("account", {}).get("data", {}).get("parsed", {}).get("info", {})
+                amount = info.get("tokenAmount", {}).get("uiAmount", 0)
+                mint = info.get("mint")
+                if amount and float(amount) > 0 and mint:
+                    tokens.append(mint)
+
+            return tokens
+
+        except Exception as e:
+            logging.warning(f"[WalletManager] Failed to get tokens: {e}")
+            return []

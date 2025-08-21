@@ -1,5 +1,4 @@
 # librarian_wallet.py
-# Wallet profile management, traits, clustering, and wallet-related queries for DataLibrarian.
 
 import time
 import logging
@@ -17,4 +16,3 @@ class LibrarianWallet:
 		if traits:
 			self.wallet_memory[wallet]["traits"].update(traits.get("traits", []))
 			self.wallet_memory[wallet]["last_seen"] = time.time()
-

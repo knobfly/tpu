@@ -60,6 +60,54 @@ except Exception:  # pragma: no cover
 
 
 class CoreSupervisor:
+    def broadcast_chart_signals(self, token_context: Dict[str, Any], chart_insights: Dict[str, Any]):
+        """
+        Broadcast chart signals and scores to all cortexes and AI/LLM brains.
+        """
+        for name, cortex in (self.cortex_modules or {}).items():
+            if hasattr(cortex, "receive_chart_signal"):
+                cortex.receive_chart_signal(token_context, chart_insights)
+        if self.ai_brain and hasattr(self.ai_brain, "receive_chart_signal"):
+            self.ai_brain.receive_chart_signal(token_context, chart_insights)
+        if self.llm_brain and hasattr(self.llm_brain, "receive_chart_signal"):
+            self.llm_brain.receive_chart_signal(token_context, chart_insights)
+
+    def share_persona_context(self, persona_context: Dict[str, Any]):
+        """
+        Share persona context and feedback with all cortexes and brains.
+        """
+        for name, cortex in (self.cortex_modules or {}).items():
+            if hasattr(cortex, "update_persona_context"):
+                cortex.update_persona_context(persona_context)
+        if self.ai_brain and hasattr(self.ai_brain, "update_persona_context"):
+            self.ai_brain.update_persona_context(persona_context)
+        if self.llm_brain and hasattr(self.llm_brain, "update_persona_context"):
+            self.llm_brain.update_persona_context(persona_context)
+
+    def route_analytics_update(self, update: Dict[str, Any]):
+        """
+        Route analytics/state updates to all modules for unified decision-making.
+        """
+        for name, cortex in (self.cortex_modules or {}).items():
+            if hasattr(cortex, "receive_analytics_update"):
+                cortex.receive_analytics_update(update)
+        if self.ai_brain and hasattr(self.ai_brain, "receive_analytics_update"):
+            self.ai_brain.receive_analytics_update(update)
+        if self.llm_brain and hasattr(self.llm_brain, "receive_analytics_update"):
+            self.llm_brain.receive_analytics_update(update)
+
+    def get_shared_feature_frame(self, token_context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Build and return a shared feature frame for cross-module analytics.
+        """
+        frame = {}
+        if self.chart and hasattr(self.chart, "build_feature_frame"):
+            frame = self.chart.build_feature_frame(token_context)
+        # Allow other cortexes to contribute features
+        for name, cortex in (self.cortex_modules or {}).items():
+            if hasattr(cortex, "contribute_features"):
+                frame.update(cortex.contribute_features(token_context))
+        return frame
     """
     Blended supervisor:
       - Collects insights from chart/wallet/social/txn/meta/risk cortices

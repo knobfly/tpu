@@ -1,5 +1,4 @@
 # librarian_chat.py
-# Chat ingestion logic split from data_librarian.py
 
 import gzip
 import json

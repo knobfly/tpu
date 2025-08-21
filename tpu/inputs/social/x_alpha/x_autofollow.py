@@ -34,10 +34,45 @@ API_UNFOLLOW     = "https://api.twitter.com/2/users/{source_id}/following/{targe
 FOLLOW_COOLDOWN_SECONDS = int(config.get("x_autofollow_cooldown_s", 60))
 FOLLOW_SCORE_THRESHOLD  = int(config.get("x_autofollow_score_threshold", 70))  # % from alpha_account_tracker
 
-# --- State ------------------------------------------------------------------
 
+# --- State ------------------------------------------------------------------
 followed_accounts: set[str] = set()
 _last_follow_time = 0.0
+
+async def batch_autofollow():
+    """
+    Automatically follow new high-score alpha accounts on a schedule.
+    """
+    from utils.meta_keywords import top_keywords
+    # Get dynamic alpha handles (scope: x_alpha)
+    alpha_handles = [k for k, _ in top_keywords("x_alpha", 100)]
+    # Fallback to tracker if no dynamic list
+    if not alpha_handles:
+        alpha_handles = list(alpha_account_tracker.get_all_handles())
+    to_follow = [h for h in alpha_handles if h not in followed_accounts]
+    log_event(f"[AutoFollow] Checking {len(to_follow)} new alpha accounts...")
+    for handle in to_follow:
+        result = await follow_user(handle)
+        if result:
+            log_event(f"[AutoFollow] Followed @{handle}")
+            followed_accounts.add(handle)
+        else:
+            log_event(f"[AutoFollow] Failed to follow @{handle}")
+
+async def autofollow_scheduler(interval_s: int = 600):
+    """
+    Run batch_autofollow every interval_s seconds (default: 10 min).
+    """
+    while True:
+        await batch_autofollow()
+        await asyncio.sleep(interval_s)
+
+def start_autofollow_loop():
+    """
+    Start the autofollow scheduler in the background (call once at startup).
+    """
+    loop = asyncio.get_event_loop()
+    loop.create_task(autofollow_scheduler())
 
 
 # === Helpers =================================================================

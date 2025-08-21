@@ -1,6 +1,4 @@
 # librarian_classify.py
-# Classification and topic extraction helpers for DataLibrarian.
-
 from librarian.librarian_config import GENRES
 
 def lowerize(x):

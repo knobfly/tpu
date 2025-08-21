@@ -1,5 +1,4 @@
 # librarian_index.py
-# Event handling and indexing logic split from data_librarian.py
 
 from librarian.librarian_models import TokenRecord, WalletRecord
 from datetime import datetime

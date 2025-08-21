@@ -485,6 +485,15 @@ async def analyze_token_risk(token_address: str) -> Dict[str, Any]:
     if "project" not in meta or not meta.get("project"):
         risk_flags.append("no_project_info")
 
+    # Deep contract scan (red flag patterns)
+    try:
+        from strategy.contract_red_flag_scanner import scan_contract_risks
+        red_flag_result = scan_contract_risks(token_address)
+        if red_flag_result.get("flags"):
+            risk_flags.extend([f"contract_redflag:{f}" for f in red_flag_result["flags"]])
+    except Exception as e:
+        logging.warning(f"[TokenUtils] Contract red flag scan failed for {token_address}: {e}")
+
     return {
         "address": token_address,
         "holders": holders,
@@ -532,29 +541,38 @@ async def get_token_age(token_address: str) -> Optional[int]:
     try:
         payload = {
             "jsonrpc": "2.0",
-            "id": 1,
-            "method": "getSignaturesForAddress",
-            "params": [token_address, {"limit": 1}]
-        }
-        txs = await _rpc_call(payload)
-        if txs and isinstance(txs.get("result", []), list):
-            first_tx = txs["result"][0]
-            block_time = first_tx.get("blockTime")
-            if block_time:
-                age = datetime.now(timezone.utc).timestamp() - block_time
-                return int(age)
-    except Exception as e:
-        logging.warning(f"[TokenUtils] Failed to fetch token age for {token_address}: {e}")
-    return None
-
-# === LP Lock Status ===
-async def get_lp_lock_status(token_address: str) -> Optional[str]:
-    try:
-        payload = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "getSignaturesForAddress",
-            "params": [token_address, {"limit": 25}]
+            try:
+                meta = await get_token_metadata(token_address)
+                holders = await get_token_holders(token_address)
+                risk_flags = [] if holders > 10 else ["low_holders"]
+                # Deep contract scan (red flag patterns)
+                try:
+                    from strategy.contract_red_flag_scanner import scan_contract_risks
+                    red_flag_result = scan_contract_risks(token_address)
+                    if red_flag_result.get("flags"):
+                        risk_flags.extend([f"contract_redflag:{f}" for f in red_flag_result["flags"]])
+                except Exception as e:
+                    logging.warning(f"[TokenUtils] Contract red flag scan failed for {token_address}: {e}")
+                return {
+                    "name": meta.get("name", "Unknown") if meta else "Unknown",
+                    "symbol": meta.get("symbol", "???") if meta else "???",
+                    "description": meta.get("project", {}).get("description", "") if meta else "",
+                    "supply": meta.get("supply", 0) if meta else 0,
+                    "decimals": meta.get("decimals", 0) if meta else 0,
+                    "holders": holders,
+                    "risk_flags": risk_flags,
+                }
+            except Exception as e:
+                logging.warning(f"[TokenUtils] Failed to fetch summary: {e}")
+                return {
+                    "name": "Unknown",
+                    "symbol": "???",
+                    "description": "",
+                    "supply": 0,
+                    "decimals": 0,
+                    "holders": 0,
+                    "risk_flags": ["fetch_error"],
+                }
         }
         txs = await _rpc_call(payload)
         if not txs or not isinstance(txs.get("result", []), list):

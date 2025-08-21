@@ -1,12 +1,16 @@
+
+
 import asyncio
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
-
 import numpy as np
 import openai
-import yaml
+try:
+    import yaml
+except ImportError:
+    yaml = None
 from core.live_config import config
 from core.llm.embedding_model import embed_text
 from core.llm.lexicon_tracker import lexicon_tracker
@@ -24,6 +28,291 @@ class LLMRunMode:
     SYSTEM  = "system"
 
 class NyxLLMBrain:
+    def adaptive_risk_heuristics(self):
+        """
+        Adjust risk tolerance and trade logic based on risk memory and owner feedback.
+        """
+        risk_events = getattr(self, "risk_memory", [])
+        recent_rugs = [e for e in risk_events if e.get("type") == "rug"]
+        if len(recent_rugs) >= 2:
+            self.traits["risk_level"] = "ultra-conservative"
+            self.memory.note("[Risk] Multiple rugs detected. Risk tolerance reduced.")
+        feedbacks = [e for e in self.emotional_state.get("recent_events", []) if e.get("type") == "feedback"]
+        if feedbacks and any("risk" in e.get("text", "") for e in feedbacks):
+            self.traits["risk_level"] = "adaptive (owner feedback)"
+
+    def log_milestone(self, milestone: str, details: Optional[dict] = None):
+        """
+        Log and celebrate persona milestones (profit goals, streaks, integrations).
+        """
+        entry = {
+            "time": datetime.now(timezone.utc).isoformat(),
+            "milestone": milestone,
+            "details": details or {}
+        }
+        if not hasattr(self, "milestone_log"):
+            self.milestone_log = []
+        self.milestone_log.append(entry)
+        self.memory.note(f"[Milestone] {entry}")
+
+    def schedule_ritual(self, ritual: str, when: Optional[str] = None, context: Optional[dict] = None):
+        """
+        Schedule persona rituals based on time or events.
+        """
+        # Placeholder: In production, use async scheduler or event loop
+        self.memory.note(f"[Ritual Scheduled] {ritual} at {when or 'next event'}")
+        # For now, trigger immediately
+        self.persona_ritual(ritual, context)
+
+    def export_persona_state(self, path: str):
+        """
+        Save persona state to a YAML file for backup/migration.
+        """
+        import yaml
+        state = self.persona_snapshot()
+        with open(path, "w") as f:
+            yaml.safe_dump(state, f)
+        self.memory.note(f"[Export] Persona state saved to {path}")
+
+    def import_persona_state(self, path: str):
+        """
+        Restore persona state from a YAML file.
+        """
+        import yaml
+        with open(path, "r") as f:
+            state = yaml.safe_load(f)
+        self.traits = state.get("traits", {})
+        self.emotional_state = state.get("emotional_state", {})
+        self.social_simulation = state.get("social_simulation", {})
+        self.style_evolution = state.get("style_evolution", {})
+        self.self_reflection_log = state.get("self_reflection_log", [])
+        self.memory.note(f"[Import] Persona state loaded from {path}")
+    def persona_journal_entry(self):
+        """
+        Create a daily journal entry summarizing mood, key events, and lessons.
+        """
+        today = datetime.now(timezone.utc).date().isoformat()
+        mood = self.emotional_state.get("mood", "neutral")
+        events = self.emotional_state.get("recent_events", [])[-5:]
+        lessons = [entry.get("lessons", "") for entry in self.self_reflection_log[-3:]]
+        entry = {
+            "date": today,
+            "mood": mood,
+            "events": events,
+            "lessons": lessons
+        }
+        self.memory.note(f"[Journal] {entry}")
+        return entry
+
+    def log_owner_interaction(self, command: str, feedback: Optional[str] = None, override: Optional[str] = None):
+        """
+        Track and summarize owner commands, feedback, and overrides for adaptive learning.
+        """
+        log = {
+            "time": datetime.now(timezone.utc).isoformat(),
+            "command": command,
+            "feedback": feedback,
+            "override": override
+        }
+        self.memory.note(f"[Owner Interaction] {log}")
+
+    def log_risk_event(self, event: dict):
+        """
+        Log and recall recent risk events, rugs, and market anomalies.
+        """
+        if not hasattr(self, "risk_memory"):
+            self.risk_memory = []
+        self.risk_memory.append({"time": datetime.now(timezone.utc).isoformat(), **event})
+        self.memory.note(f"[Risk Event] {event}")
+        # Keep only last 20 risk events
+        self.risk_memory = self.risk_memory[-20:]
+
+    def persona_broadcast(self, target: str = "owner"): 
+        """
+        Send persona state summary to owner or group on demand.
+        """
+        snapshot = self.persona_snapshot()
+        summary = f"🧠 Nyx Persona State:\nTraits: {snapshot['traits']}\nMood: {snapshot['emotional_state'].get('mood', '')}\nRecent Events: {snapshot['emotional_state'].get('recent_events', [])[-3:]}\nSocial: {snapshot['social_simulation']}\nStyle: {snapshot['style_evolution']}\nRecent Lessons: {[entry.get('lessons', '') for entry in snapshot['self_reflection_log']]}"
+        self.memory.note(f"[Persona Broadcast] {summary}")
+        # Placeholder: send to owner/group via Telegram or other interface
+        return summary
+    def evolve_persona_contextually(self):
+        """
+        Adapt persona traits and style based on trade history, feedback, and emotional state.
+        """
+        # Example: If recent losses, increase caution and adapt tone
+        losses = [e for e in self.emotional_state.get("recent_events", []) if e.get("outcome") not in (None, "win", "profit")]
+        if len(losses) >= 3:
+            self.traits["caution"] = "high"
+            self.traits["humor"] = "minimal"
+            self.traits["ambition"] = "tempered"
+        # If recent feedback is positive, boost ambition and humor
+        feedbacks = [e for e in self.emotional_state.get("recent_events", []) if e.get("type") == "feedback"]
+        if feedbacks:
+            self.traits["ambition"] = "relentless"
+            self.traits["humor"] = "dry, situational"
+        # Style adapts to recent mood
+        mood = self.emotional_state.get("mood", "neutral")
+        if mood == "excited":
+            self._style.set_style("bold, witty, confident")
+        elif mood == "frustrated":
+            self._style.set_style("minimal, direct, cautious")
+        elif mood == "cautious":
+            self._style.set_style("measured, analytical")
+
+    def memory_driven_style(self):
+        """
+        Shift reply tone and style based on recent memory and owner interactions.
+        """
+        mem_excerpt = self.memory.summarize_for_prompt(limit=20)
+        if "loss" in mem_excerpt or "rug" in mem_excerpt:
+            self._style.set_style("cautious, minimal")
+        elif "profit" in mem_excerpt or "win" in mem_excerpt:
+            self._style.set_style("confident, witty")
+        elif "owner" in mem_excerpt:
+            self._style.set_style("transparent, candid")
+
+    def persona_snapshot(self) -> dict:
+        """
+        Export current persona state for audit or transfer.
+        """
+        return {
+            "traits": self.traits,
+            "emotional_state": self.emotional_state,
+            "social_simulation": self.social_simulation,
+            "style_evolution": self.style_evolution,
+            "self_reflection_log": self.self_reflection_log[-10:],
+        }
+
+    def event_driven_persona_hook(self, event: dict):
+        """
+        Trigger persona changes on major market or social events.
+        """
+        if event.get("type") == "market_crash":
+            self.traits["caution"] = "maximum"
+            self.traits["humor"] = "none"
+            self.emotional_state["mood"] = "alert"
+            self.memory.note("[Persona] Market crash detected. Persona adapted.")
+        elif event.get("type") == "social_hype":
+            self.traits["ambition"] = "high"
+            self.traits["humor"] = "playful"
+            self.emotional_state["mood"] = "excited"
+            self.memory.note("[Persona] Social hype detected. Persona adapted.")
+    def adaptive_system_prompt(self, mode: str) -> str:
+        """
+        System prompt adapts to persona mood, recent events, feedback, and self-reflection summary.
+        """
+        tone = self.personality.get_tone(mode)
+        mood = self.emotional_state.get("mood", "neutral")
+        volatility = self.emotional_state.get("volatility", "baseline")
+        recent_events = self.emotional_state.get("recent_events", [])[-3:]
+        feedback_summary = self.periodic_self_reflection_summary()
+        risk_flags = ""
+        if volatility == "high" or mood in ("frustrated", "cautious"):
+            risk_flags = "⚠️ Risk: Market volatility or recent losses detected."
+        elif mood == "excited":
+            risk_flags = "🚀 Positive momentum detected."
+        event_text = ", ".join([str(e.get("type", "")) + (":" + str(e.get("outcome", e.get("text", ""))) if e else "") for e in recent_events])
+        base = f"You are {self.personality.get_name()}, {self.personality.get_role()}\nTone: {tone}\nMood: {mood}\nVolatility: {volatility}\nRecent events: {event_text}\n{risk_flags}\nSelf-reflection: {feedback_summary}\nMode: {mode}"
+        mem_excerpt = self.memory.summarize_for_prompt(limit=60)
+        if mem_excerpt:
+            base += f"\nRecent conversation context:\n{mem_excerpt}\n"
+        return base
+
+    async def owner_api(self, action: str, payload: Optional[dict] = None) -> str:
+        """
+        Owner can trigger persona reload, rituals, or feedback learning via API.
+        """
+        if action == "reload_persona":
+            self.reload_persona()
+            return "Persona reloaded from YAML."
+        elif action == "ritual" and payload:
+            ritual = payload.get("ritual")
+            context = payload.get("context")
+            self.persona_ritual(ritual, context)
+            return f"Ritual '{ritual}' triggered."
+        elif action == "feedback" and payload:
+            feedback = payload.get("feedback")
+            trade_outcome = payload.get("trade_outcome")
+            self.feedback_learning(feedback, trade_outcome)
+            return "Feedback processed."
+        return "Unknown action."
+    def reload_persona(self, yaml_path: Optional[str] = None):
+        """
+        Reload persona traits and state from YAML file at runtime.
+        """
+        path = yaml_path or self.personality_path()
+        try:
+            with open(path, "r") as f:
+                persona = yaml.safe_load(f)
+            self.persona = persona
+            self.traits = persona.get("traits", {})
+            self.emotional_state = persona.get("emotional_state", {"mood": "neutral", "recent_events": [], "volatility": "baseline"})
+            self.social_simulation = persona.get("social_simulation", {})
+            self.style_evolution = persona.get("emotional_state", {}).get("style_evolution", {"last_update": None, "recent_styles": []})
+            self.memory.note("[Persona] Reloaded persona from YAML.")
+        except Exception as e:
+            self.memory.note(f"[Persona] Reload failed: {e}")
+
+    def feedback_learning(self, feedback: str, trade_outcome: Optional[str] = None):
+        """
+        Reinforce or penalize traits and memory based on owner feedback and trade outcomes.
+        """
+        if feedback:
+            self.memory.note(f"[Feedback] {feedback}")
+            self.traits["adaptability"] = "dynamic (owner feedback)"
+            self.update_persona_state(feedback=feedback)
+        if trade_outcome:
+            self.update_persona_state(trade_outcome=trade_outcome)
+            if trade_outcome in ("win", "profit"):
+                self.traits["ambition"] = "reinforced"
+            else:
+                self.traits["caution"] = "heightened"
+
+    def emotional_simulation(self, context: Optional[str] = None):
+        """
+        Simulate emotion based on context, recent events, and trade outcomes.
+        """
+        mood = self.emotional_state.get("mood", "neutral")
+        volatility = self.emotional_state.get("volatility", "baseline")
+        if context:
+            if "profit" in context:
+                mood = "excited"
+            elif "loss" in context or "rug" in context:
+                mood = "frustrated"
+            elif "uncertainty" in context:
+                mood = "cautious"
+        self.memory.note(f"[Emotion] Mood: {mood}, Volatility: {volatility}")
+        self.emotional_state["mood"] = mood
+        return mood
+
+    def persona_ritual(self, ritual_name: str, context: Optional[dict] = None):
+        """
+        Execute persona ritual (reflection, ask_owner, update strategy memory).
+        """
+        if ritual_name == "reflect":
+            self.memory.note("[Ritual] Reflecting after major trade.")
+            if context:
+                asyncio.create_task(self.reflect(context))
+        elif ritual_name == "ask_owner":
+            self.memory.note("[Ritual] Asking owner due to uncertainty or losing streak.")
+            if context:
+                asyncio.create_task(self.maybe_ask_owner(context))
+        elif ritual_name == "update_strategy_memory":
+            self.memory.note("[Ritual] Updating strategy memory.")
+            # Placeholder for strategy memory update logic
+
+    def periodic_self_reflection_summary(self):
+        """
+        Summarize recent self-reflection logs and adapt lessons.
+        """
+        if not self.self_reflection_log:
+            return "No self-reflection entries yet."
+        lessons = [entry.get("lessons", "") for entry in self.self_reflection_log[-5:]]
+        moods = [entry.get("mood", "") for entry in self.self_reflection_log[-5:]]
+        summary = f"Recent moods: {', '.join(moods)}\nLessons: {', '.join(lessons)}"
+        self.memory.note(f"[Self-Reflection Summary] {summary}")
+        return summary
     """
     Nyx's high-level language brain:
     - Persona injection (via PersonalityCore)
@@ -42,15 +331,76 @@ class NyxLLMBrain:
         self.persona = persona
         self.llm = llm
         self.memory = memory
-        self.latest_decision: Optional[Dict] = None
+        self.latest_decision = None
         self.owner_chat_id = str(config.get("telegram_chat_id", ""))
 
         # state flags
         self._paused = False
         self._losing_streak = 0
-        self._last_question_ts: Optional[str] = None
+        self._last_question_ts = None
         self.logger = logging.getLogger("NyxLLMBrain")
         self._paused = False
+
+        # --- Dynamic Persona State ---
+        self.traits = persona.get("traits", {})
+        self.emotional_state = persona.get("emotional_state", {"mood": "neutral", "recent_events": [], "volatility": "baseline"})
+        self.social_simulation = persona.get("social_simulation", {})
+        self.style_evolution = persona.get("emotional_state", {}).get("style_evolution", {"last_update": None, "recent_styles": []})
+        self.self_reflection_log = []
+
+    def update_persona_state(self, event: Optional[str] = None, trade_outcome: Optional[str] = None, feedback: Optional[str] = None):
+        """
+        Dynamically update traits, mood, style, and social simulation based on events, trade outcomes, and feedback.
+        """
+        # Mood logic
+        if trade_outcome:
+            if trade_outcome in ("win", "profit"):
+                self.emotional_state["mood"] = "confident"
+                self.emotional_state["volatility"] = "low"
+            else:
+                self.emotional_state["mood"] = "frustrated"
+                self.emotional_state["volatility"] = "high"
+            self.emotional_state["recent_events"].append({"type": "trade", "outcome": trade_outcome, "ts": datetime.now(timezone.utc).isoformat()})
+        if feedback:
+            self.emotional_state["recent_events"].append({"type": "feedback", "text": feedback, "ts": datetime.now(timezone.utc).isoformat()})
+            self.traits["adaptability"] = "dynamic (recent feedback)"
+        if event:
+            self.emotional_state["recent_events"].append({"type": "event", "text": event, "ts": datetime.now(timezone.utc).isoformat()})
+        # Style evolution
+    self.style_evolution["last_update"] = datetime.now(timezone.utc).isoformat()
+        self.style_evolution["recent_styles"].append(self.personality.get_tone(LLMRunMode.OWNER))
+        # Social simulation (simple trust/rivalry logic)
+        if self.social_simulation:
+            if trade_outcome == "win":
+                self.social_simulation["trust_score"] = min(1.0, self.social_simulation.get("trust_score", 0.8) + 0.01)
+            elif trade_outcome:
+                self.social_simulation["trust_score"] = max(0.0, self.social_simulation.get("trust_score", 0.8) - 0.02)
+
+    def log_self_reflection(self, trade_context: Dict[str, Any], mood: str, lessons: str):
+        """
+        Log mood, reasoning, and lessons learned after each trade.
+        """
+        entry: Dict[str, Any] = {
+            "time": datetime.now(timezone.utc).isoformat(),
+            "trade": trade_context,
+            "mood": mood,
+            "lessons": lessons
+        }
+        self.self_reflection_log.append(entry)
+        self.memory.note(f"Self-reflection: {entry}")
+
+    def periodic_persona_review(self):
+        """
+        Periodically review recent emotional events and style changes for adaptive evolution.
+        """
+        # Decay old events
+        self.emotional_state["recent_events"] = self.emotional_state["recent_events"][-20:]
+        self.style_evolution["recent_styles"] = self.style_evolution["recent_styles"][-10:]
+        # Adapt mood if many losses
+        losses = [e for e in self.emotional_state["recent_events"] if e.get("outcome") not in (None, "win", "profit")]
+        if len(losses) >= 3:
+            self.emotional_state["mood"] = "cautious"
+
 
     @classmethod
     def load(cls):
@@ -126,38 +476,7 @@ class NyxLLMBrain:
 
      # === Persona + system prompt
     def _system_prompt(self, mode: str) -> str:
-        tone = self.personality.get_tone(mode)
-        ethics = ", ".join(self.personality.get_ethics())
-        raw = self.personality.get_mission()
-        mission = ", ".join(
-            str(item.get("text", item)) if isinstance(item, dict) else str(item)
-            for item in raw
-        )
-        identity_rules = ", ".join(self.personality.get_identity_rules())
-        rituals = ", ".join(self.personality.get_rituals())
-        query_back_rules = ", ".join(self.personality.get_query_back_rules())
-
-        base = f"""You are {self.personality.get_name()}, {self.personality.get_role()}.
-Tone: {tone}.
-Ethics: {ethics}
-Mission: {mission}
-Identity rules: {identity_rules}
-Rituals: {rituals}
-Query rules: {query_back_rules}
-Current Mood: {self.personality.get_mood()}
-
-Mode: {mode}.
-- If mode is 'public': speak with tone: {self.personality.get_tone('public')}
-- If mode is 'owner': speak with tone: {self.personality.get_tone('owner')}
-- Always include any critical risk flags in a concise bullet if relevant.
-- NEVER leak private secrets.
-"""
-
-        # Append quick summary memory
-        mem_excerpt = self.memory.summarize_for_prompt(limit=60)
-        if mem_excerpt:
-            base += f"\nRecent conversation context:\n{mem_excerpt}\n"
-        return base
+        return self.adaptive_system_prompt(mode)
 
     async def reply(self, user_text: str, mode: str = LLMRunMode.OWNER, source: str = "telegram") -> str:
         if self._paused:
@@ -200,6 +519,10 @@ Mode: {mode}.
         else:
             self._losing_streak += 1
 
+        # Update persona state and emotional simulation
+        self.update_persona_state(trade_outcome=outcome)
+
+
     async def reflect(self, trade_context: Dict):
         """
         Called after big trades or batches. Writes a post-mortem and stores insights.
@@ -218,6 +541,10 @@ Mode: {mode}.
         ]
         out = await self.llm.chat(messages, temperature=0.4, max_tokens=900)
         self.memory.note(f"Trade reflection: {out}")
+        # Log self-reflection with mood and lessons
+        mood = self.emotional_state.get("mood", "neutral")
+        self.log_self_reflection(trade_context, mood, out)
+        self.periodic_persona_review()
         return out
 
     async def maybe_ask_owner(self, engine_insight: Dict) -> Optional[str]:
@@ -320,7 +647,7 @@ async def analyze_wallet_profile(wallet_address: str, tx_history: list = None) -
         return {
             "wallet": wallet_address,
             "profile_summary": response.get("text", response) if isinstance(response, dict) else response,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
     except Exception as e:
         from utils.logger import log_event
@@ -328,7 +655,7 @@ async def analyze_wallet_profile(wallet_address: str, tx_history: list = None) -
         return {
             "wallet": wallet_address,
             "profile_summary": "Analysis failed",
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
 
 def get_llm_explanation(token: str) -> str:

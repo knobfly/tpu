@@ -10,6 +10,36 @@ from utils.keyword_tools import extract_keywords
 
 
 class SocialCortex:
+    # --- Supervisor Integration Hooks ---
+    def receive_chart_signal(self, token_context: dict, chart_insights: dict):
+        """
+        Receive chart signals broadcast from supervisor or other modules.
+        Can be used to update social scoring or trigger analytics.
+        """
+        pass
+
+    def update_persona_context(self, persona_context: dict):
+        """
+        Receive persona context updates for adaptive social logic.
+        """
+        pass
+
+    def receive_analytics_update(self, update: dict):
+        """
+        Receive analytics/state updates for unified decision-making.
+        """
+        pass
+
+    def contribute_features(self, token_context: dict) -> dict:
+        """
+        Contribute social-derived features for cross-module analytics.
+        """
+        insights = self.analyze_sentiment(token_context)
+        return {
+            "social_score": insights.get("social_score", 0.0),
+            "mention_count": insights.get("mention_count", 0),
+            "reactivity_score": insights.get("reactivity_score", 0),
+        }
     def __init__(self, memory):
         self.memory = memory
 

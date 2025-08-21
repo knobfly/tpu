@@ -1,5 +1,4 @@
 # librarian_trace.py
-# Archival, trace logging, and library indexing/querying for DataLibrarian.
 
 import json
 import logging
@@ -27,4 +26,3 @@ class LibrarianTrace:
 		arr = self._memory_store.setdefault("archive", [])
 		arr.append(line)
 		logging.info(f"[LibrarianTrace] Archived event for token {token}")
-

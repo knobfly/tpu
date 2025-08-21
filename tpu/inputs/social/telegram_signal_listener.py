@@ -46,6 +46,63 @@ def extract_signal_candidates(text: str) -> dict:
 
 
 async def _handle_telegram_signal(text: str, chat_id: int, user_handle: str):
+    # --- Spam/Flood Detection ---
+    # Track message frequency per user/group
+    from collections import defaultdict
+    spam_tracker = getattr(_handle_telegram_signal, 'spam_tracker', None)
+    if spam_tracker is None:
+        spam_tracker = defaultdict(lambda: {'count': 0, 'last': 0})
+        setattr(_handle_telegram_signal, 'spam_tracker', spam_tracker)
+    now = time.time()
+    spam_key = f"{chat_id}:{user_handle}"
+    rec = spam_tracker[spam_key]
+    if now - rec['last'] < 5:
+        rec['count'] += 1
+    else:
+        rec['count'] = 1
+    rec['last'] = now
+    # If user floods >5 msgs in 30s, ignore
+    if rec['count'] > 5:
+        logging.info(f"[SpamDetect] Ignoring flood from {user_handle} in {chat_id}")
+        return
+
+    # --- Influencer/Admin Profiling ---
+    # Track frequent posters and admins
+    influencer_tracker = getattr(_handle_telegram_signal, 'influencer_tracker', None)
+    if influencer_tracker is None:
+        influencer_tracker = defaultdict(lambda: {'count': 0, 'last': 0})
+        setattr(_handle_telegram_signal, 'influencer_tracker', influencer_tracker)
+    influencer_rec = influencer_tracker[user_handle]
+    influencer_rec['count'] += 1
+    influencer_rec['last'] = now
+    # If user posts >20 times/day, mark as influencer
+    if influencer_rec['count'] > 20:
+        try:
+            from librarian.data_librarian import librarian
+            librarian.catalog_influencer({
+                'user': user_handle,
+                'group': chat_id,
+                'count': influencer_rec['count'],
+                'last': datetime.utcnow().isoformat()
+            })
+        except Exception:
+            pass
+
+    # --- Scam/Rug Signal Detection ---
+    scam_keywords = ["rug", "scam", "exit", "pull", "hack", "exploit", "stolen", "drain"]
+    if any(k in text.lower() for k in scam_keywords):
+        try:
+            from librarian.data_librarian import librarian
+            librarian.blacklist_source({
+                'user': user_handle,
+                'group': chat_id,
+                'text': text,
+                'timestamp': datetime.utcnow().isoformat()
+            })
+            logging.info(f"[ScamDetect] Blacklisted source {user_handle} in {chat_id}")
+        except Exception:
+            pass
+        return
     """Core signal pipeline (telethon-agnostic)."""
     if not config.get("enable_telegram_learning", False):
         return
@@ -126,6 +183,22 @@ async def _handle_telegram_signal(text: str, chat_id: int, user_handle: str):
     if config.get("debug_mode"):
         logging.debug(f"[TGSignal] Routed event: {event}")
 
+    # --- Structured ingest to librarian ---
+    from librarian.data_librarian import librarian
+    msg_obj = {
+        'group': None,
+        'user': user_handle,
+        'text': text,
+        'keywords': nlp.get('keywords', []),
+        'sentiment': nlp.get('sentiment'),
+        'wallets': event.get('addresses', []),
+        'tokens': event.get('tickers', []),
+        'timestamp': datetime.utcnow().isoformat()
+    }
+    try:
+        librarian.ingest_telegram_message(msg_obj)
+    except Exception as e:
+        logging.warning(f"[TGSignalListener] librarian ingest failed: {e}")
 
 async def run_telegram_signal_listener():
     """

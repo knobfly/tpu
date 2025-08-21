@@ -1,5 +1,12 @@
-# --- Token summary utility ---
-from typing import Any, Dict, List
+# librarian_utils.py
+import gzip
+import json
+import os
+import re
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+
 def get_token_summary(token_memory: Dict[str, Any], token: str) -> Dict[str, Any]:
     """
     Return a lightweight summary of a token’s known memory profile.
@@ -24,7 +31,6 @@ def get_token_summary(token_memory: Dict[str, Any], token: str) -> Dict[str, Any
         "created": token_data.get("created", None)
     }
 
-# --- Meta keywords utility ---
 def get_meta_keywords(memory_store: Dict[str, Any], limit: int = 20) -> List[str]:
     """
     Safely returns top keywords by count from memory.
@@ -41,7 +47,6 @@ def get_meta_keywords(memory_store: Dict[str, Any], limit: int = 20) -> List[str
     sorted_keywords.sort(key=lambda x: x[1], reverse=True)
     return [k for k, _ in sorted_keywords[:limit]]
 
-# --- Persist all utility ---
 def persist_all(
     token_memory: Dict[str, Any],
     wallet_memory: Dict[str, Any],
@@ -66,9 +71,6 @@ def persist_all(
         log_event("[Librarian] 🧠 All memory persisted successfully.")
     except Exception as e:
         logging.warning(f"[Librarian] Failed to persist memory: {e}")
-# ...existing code...
-from typing import Any, Dict, Optional
-import json
 
 def find_token(payload: Dict[str, Any]) -> Optional[str]:
     for key in ("token", "token_address", "mint", "address"):
@@ -98,15 +100,6 @@ def safe_read_json_dict(path: str) -> Dict[str, Any]:
         return data if isinstance(data, dict) else {}
     except Exception:
         return {}
-# librarian_utils.py
-# Utility and helper functions for DataLibrarian.
-
-import gzip
-import json
-import os
-import re
-from pathlib import Path
-from typing import Any, Dict, Optional
 
 def safe_iter_jsonl(pathlike: str | Path):
     p = Path(pathlike)

@@ -1,5 +1,4 @@
 # librarian_stream.py
-# Stream ingestion, event normalization, indexing, and helpers for DataLibrarian.
 
 import asyncio
 import json
@@ -57,4 +56,3 @@ class LibrarianStream:
 				merged.sort(key=lambda e: e["ts"])
 				return merged[-limit:]
 			return list(self._events_by_type[event_type])[-limit:]
-

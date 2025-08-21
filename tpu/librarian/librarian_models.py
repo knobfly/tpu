@@ -1,5 +1,4 @@
 # librarian_models.py
-# Dataclasses and models for DataLibrarian (TokenRecord, WalletRecord, etc.)
 
 from dataclasses import dataclass, field
 from typing import Deque, Dict, Any, Set

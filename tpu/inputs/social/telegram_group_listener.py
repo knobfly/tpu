@@ -115,6 +115,60 @@ class TelegramGroupListener:
         return self.executor
 
     async def process_event_message(self, event):
+        # --- Spam/Flood Detection ---
+        spam_tracker = getattr(self, 'spam_tracker', None)
+        if spam_tracker is None:
+            from collections import defaultdict
+            spam_tracker = defaultdict(lambda: {'count': 0, 'last': 0})
+            self.spam_tracker = spam_tracker
+        now = time.time()
+        spam_key = f"{group_name}:{sender}"
+        rec = spam_tracker[spam_key]
+        if now - rec['last'] < 5:
+            rec['count'] += 1
+        else:
+            rec['count'] = 1
+        rec['last'] = now
+        if rec['count'] > 5:
+            logging.info(f"[SpamDetect] Ignoring flood from {sender} in {group_name}")
+            return
+
+        # --- Influencer/Admin Profiling ---
+        influencer_tracker = getattr(self, 'influencer_tracker', None)
+        if influencer_tracker is None:
+            from collections import defaultdict
+            influencer_tracker = defaultdict(lambda: {'count': 0, 'last': 0})
+            self.influencer_tracker = influencer_tracker
+        influencer_rec = influencer_tracker[sender]
+        influencer_rec['count'] += 1
+        influencer_rec['last'] = now
+        if influencer_rec['count'] > 20:
+            try:
+                from librarian.data_librarian import librarian
+                librarian.catalog_influencer({
+                    'user': sender,
+                    'group': group_name,
+                    'count': influencer_rec['count'],
+                    'last': datetime.utcnow().isoformat()
+                })
+            except Exception:
+                pass
+
+        # --- Scam/Rug Signal Detection ---
+        scam_keywords = ["rug", "scam", "exit", "pull", "hack", "exploit", "stolen", "drain"]
+        if any(k in text.lower() for k in scam_keywords):
+            try:
+                from librarian.data_librarian import librarian
+                librarian.blacklist_source({
+                    'user': sender,
+                    'group': group_name,
+                    'text': text,
+                    'timestamp': datetime.utcnow().isoformat()
+                })
+                logging.info(f"[ScamDetect] Blacklisted source {sender} in {group_name}")
+            except Exception:
+                pass
+            return
         """
         Process a Telethon NewMessage event.
         """
@@ -229,6 +283,22 @@ class TelegramGroupListener:
         except Exception as e:
             logging.warning(f"[TG Listener] token extraction failed: {e}")
 
+        # --- Structured ingest to librarian ---
+        from librarian.data_librarian import librarian
+        msg_obj = {
+            'group': group_name,
+            'user': sender,
+            'text': text,
+            'keywords': keywords,
+            'sentiment': sentiment_score,
+            'wallets': tagged_wallets,
+            'tokens': token_candidates,
+            'timestamp': datetime.utcnow().isoformat()
+        }
+        try:
+            librarian.ingest_telegram_message(msg_obj)
+        except Exception as e:
+            logging.warning(f"[TG Listener] librarian ingest failed: {e}")
         # optional talk-back
         if self.allow_talk and self.should_respond(text):
             await self.respond_to_event(event, text)

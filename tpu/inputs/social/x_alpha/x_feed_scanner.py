@@ -34,7 +34,7 @@ _trending = TrendingTerms(half_life_sec=X_TREND_HALFLIFE)
 def _ensure_dirs():
     os.makedirs(X_STATE_DIR, exist_ok=True)
 
-def _load_json(path: str, default):
+def _load_json(path: str, default: list) -> list:
     try:
         if os.path.exists(path):
             with open(path, "r") as f:
@@ -43,7 +43,7 @@ def _load_json(path: str, default):
         pass
     return default
 
-def _save_json(path: str, data):
+def _save_json(path: str, data: list) -> None:
     try:
         with open(path, "w") as f:
             json.dump(data, f, indent=2)
@@ -101,7 +101,7 @@ def _extract_tokens(text: str) -> Set[str]:
             out.add(w)
     return out
 
-def _extract_handle(tweet: dict) -> str:
+def _extract_handle(tweet: dict[str, any]) -> str:
     user = tweet.get("user") or tweet.get("author") or tweet.get("handle")
     if isinstance(user, dict):
         return ensure_str(user.get("username") or user.get("screen_name") or user.get("handle"))
@@ -120,6 +120,15 @@ async def fetch_x_mentions(token: str) -> list[str]:
         log_event(f"[XFeed] fetch_x_mentions fetch failed: {e}")
         return mentions
 
+    def send_alert(message: str):
+        """Send a real-time alert (DM, push, etc.). Replace with actual DM logic."""
+        log_event(f"[ALERT] {message}")
+        # Example: send_self_dm(message) or push notification
+
+    def update_keywords(scope: str, keywords: list[str]):
+        """Admin function to update dynamic keywords for filtering."""
+        from utils.meta_keywords import add_keywords
+        add_keywords(scope=scope, keywords=keywords, source="admin", ref="manual_update")
     t = token.lower()
     for tw in tweets:
         text = ensure_str(tw.get("text", ""))
@@ -175,24 +184,74 @@ async def run_scan_x_feed():
     new_handles = set()
     new_tokens = set()
 
+    # --- Advanced analytics with dynamic keywords ---
+    from special.insight_logger import log_insight
+    from utils.meta_keywords import top_keywords
+    from inputs.social.x_alpha.alpha_account_tracker import alpha_account_tracker
+    # fallback static lists if no dynamic keywords found
+    default_scam = ["rug", "scam", "exit", "pull", "hack", "exploit", "stolen", "drain"]
+    default_launch = ["launch", "listing", "live", "pump", "moon", "entry", "new", "drop"]
+    default_influencer = ["alpha", "whale", "team", "dev", "admin", "lead", "founder"]
+    scam_keywords = [k for k, _ in top_keywords("x_scam", 20)] or default_scam
+    launch_keywords = [k for k, _ in top_keywords("x_launch", 20)] or default_launch
+    influencer_keywords = [k for k, _ in top_keywords("x_influencer", 20)] or default_influencer
+    try:
+        from strategy.sentiment_analyzer import analyze_sentiment
+    except ImportError:
+        def analyze_sentiment(texts):
+            # fallback: neutral sentiment
+            return {"score": 0, "label": "neutral"}
+
     for tw in tweets:
         text = ensure_str(tw.get("text", ""))
         handle = _extract_handle(tw)
         tokens = _extract_tokens(text)
 
+    sentiment = analyze_sentiment([text]) if text else {"score": 0, "label": "neutral"}
+    scam_detected = any(k in text.lower() for k in scam_keywords)
+    launch_detected = any(k in text.lower() for k in launch_keywords)
+    influencer_detected = any(k in text.lower() for k in influencer_keywords)
+    influencer_score = alpha_account_tracker.get_score(handle) if handle else 0
+
         if handle:
             new_handles.add(handle)
         new_tokens.update(tokens)
+
+        # --- Librarian tagging ---
+        tags = []
+        if scam_detected:
+            tags.append("scam")
+        if launch_detected:
+            tags.append("launch")
+        if influencer_detected or influencer_score > 70:
+            tags.append("influencer")
+        if sentiment["score"] > 0.5:
+            tags.append("positive")
+        elif sentiment["score"] < -0.5:
+            tags.append("negative")
 
         try:
             await librarian.record_event("x_tweet_ingest", {
                 "timestamp": time.time(),
                 "handle": handle,
                 "text": text,
-                "token_hint": next(iter(tokens), None)
+                "token_hint": next(iter(tokens), None),
+                "sentiment": sentiment,
+                "tags": tags,
+                "influencer_score": influencer_score
             })
         except Exception:
             pass
+
+        # --- Insight logging ---
+        log_insight("x_analytics", {
+            "handle": handle,
+            "text": text,
+            "tokens": list(tokens),
+            "sentiment": sentiment,
+            "tags": tags,
+            "influencer_score": influencer_score
+        })
 
         for term in tokens:
             _trending.register_observation(term, usable=False, ts=time.time())
@@ -214,3 +273,10 @@ async def run_scan_x_feed():
         pass
 
     log_event("✅ X feed scan complete (passive mode)")
+
+        # --- Automated daily/periodic summary and self-DM ---
+        from special.insight_logger import generate_daily_summary
+        if config.get("enable_telegram_talking", False):
+            summary = generate_daily_summary()
+            # send_self_dm(summary)  # Pseudo-code: replace with actual DM logic if available
+            log_event(f"[SelfDM] X daily summary triggered: {summary}")

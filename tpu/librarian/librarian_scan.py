@@ -1,5 +1,4 @@
 # librarian_scan.py
-# Scanning and indexing routines split from data_librarian.py
 
 import asyncio
 import json

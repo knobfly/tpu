@@ -43,6 +43,3 @@ class LibrarianLearning:
 				"exit_mode": "default",
 				"notes": [f"error: {e}"],
 			}
-# librarian_learning.py
-# Learning, strategy, and reinforcement logic for DataLibrarian.
-

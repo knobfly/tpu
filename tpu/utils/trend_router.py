@@ -58,8 +58,9 @@ async def score_and_log_token(entry: dict, source: str):
 
 
 async def scan_all_trending():
+
     update_status("trend_router")
-    log_event("🌍 Trend Router: starting multi-source trending scan")
+    log_event("🌍 Trend Router: starting autonomous trending scan")
 
     global _seen, _trending_results
     _seen = set()
@@ -68,33 +69,86 @@ async def scan_all_trending():
     try:
         sources = []
 
-        # ✅ Birdeye preferred
-        birdeye = await fetch_birdeye_trending()
-        data = birdeye.get("data", [])
-        if data:
-            sources.append(("birdeye_trending", data))
-        else:
-            log_event("⚠️ Birdeye unavailable, falling back to others")
+        # === Internal autonomous trending ===
+        # 1. Get top tokens by activity, volume, and mentions from librarian memory
+        top_activity = librarian.query_by_genre("activity", limit=30)
+        top_volume = librarian.query_by_genre("volume", limit=30)
+        top_mentions = librarian.query_by_topic("mention", limit=30)
 
-        # ✅ Others as backup
-        tasks = [
-            fetch_dexscreener_trending(),
-            fetch_gecko_terminal_trending(),
-            fetch_alt_trending()
-        ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        # 2. Aggregate unique tokens
+        token_set = set()
+        for entry in top_activity + top_volume + top_mentions:
+            token = entry.get("token")
+            if token:
+                token_set.add(token)
 
-        for (name, result) in zip(["dexscreener", "geckoterminal", "alt_trending"], results):
-            if isinstance(result, Exception):
-                logging.warning(f"[TrendRouter] Error in {name}: {result}")
-                continue
-            sources.append((name, result))
+        # 3. Score each token using cortexes (via CoreSupervisor)
+        from cortex.core_supervisor import CoreSupervisor
+        from cortex.chart_cortex import ChartCortex
+        from cortex.wallet_cortex import WalletCortex
+        from cortex.social_cortex import SocialCortex
+        from cortex.meta_cortex import MetaCortex
+        from cortex.risk_cortex import RiskCortex
+        from cortex.txn_cortex import TxnCortex
 
-        # 🚀 Score everything
-        for source_name, token_list in sources:
-            for token in token_list:
-                await score_and_log_token(token, source_name)
+        # Setup cortexes with librarian memory
+        cortices = {
+            "chart": ChartCortex(librarian),
+            "wallet": WalletCortex(librarian),
+            "social": SocialCortex(librarian),
+            "meta": MetaCortex(librarian),
+            "risk": RiskCortex(librarian),
+            "txn": TxnCortex(librarian),
+        }
+        supervisor = CoreSupervisor(cortices)
 
+        # 4. Build token context and score
+        for token in token_set:
+            # Build context from librarian
+            context = await librarian.build_context(token)
+            result = supervisor.evaluate(context)
+            score = result.get("final_score", 0)
+            action = result.get("action", "unknown")
+            reasoning = result.get("reasoning", [])
+            meta = context
+            _trending_results.append({
+                "address": token,
+                "symbol": meta.get("symbol", "???"),
+                "source": "internal_trending",
+                "score": score,
+                "action": action,
+                "reasoning": reasoning,
+                "meta": meta
+            })
+            log_event(f"🔥 Trending: {meta.get('symbol', '???')} [internal] | Score: {score} | Action: {action}")
+
+        # === External sources as backup ===
+        try:
+            birdeye = await fetch_birdeye_trending()
+            data = birdeye.get("data", [])
+            if data:
+                sources.append(("birdeye_trending", data))
+            else:
+                log_event("⚠️ Birdeye unavailable, falling back to others")
+
+            tasks = [
+                fetch_dexscreener_trending(),
+                fetch_gecko_terminal_trending(),
+                fetch_alt_trending()
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for (name, result) in zip(["dexscreener", "geckoterminal", "alt_trending"], results):
+                if isinstance(result, Exception):
+                    logging.warning(f"[TrendRouter] Error in {name}: {result}")
+                    continue
+                sources.append((name, result))
+            for source_name, token_list in sources:
+                for token in token_list:
+                    await score_and_log_token(token, source_name)
+        except Exception as e:
+            logging.warning(f"[TrendRouter] External trending error: {e}")
+
+        # Save results
         librarian.save_trending_results(_trending_results)
         librarian.set_timestamp("last_trending_check", time.time())
 

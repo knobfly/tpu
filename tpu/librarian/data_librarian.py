@@ -6,9 +6,7 @@
 # - Optionally mirrors all live events from signal_bus (attach_bus)
 # - Normalizes & indexes data by token, wallet, signal type
 # - Exposes fast query APIs for Cortexes
-# - No ai_brain import. Data flows up.
 # -----------------------------------------------------------------------------
-
 from __future__ import annotations
 
 import asyncio
@@ -23,17 +21,25 @@ import shutil
 import time
 import contextlib
 
-# Import split modules
 from librarian.librarian_stream import LibrarianStream
 from librarian.librarian_token import LibrarianToken
 from librarian.librarian_wallet import LibrarianWallet
 from librarian.librarian_nlp import LibrarianNLP
+from librarian.librarian_telegram import LibrarianTelegram
+from librarian.librarian_config import RUNTIME_ROOT, LOGS_ROOT, LIBRARY_ROOT, GENRES, JSONL_SOURCES, DISK_SCAN_INTERVAL_SEC, STATUS_HEARTBEAT_SECONDS, MAX_EVENTS_PER_TYPE, MAX_TOKEN_EVENTS, MAX_WALLET_EVENTS
+from librarian.librarian_utils import find_token, find_wallet, safe_read_json_dict
+from librarian.librarian_models import TokenRecord, WalletRecord
+from librarian.librarian_learning import LibrarianLearning
+from librarian.librarian_chat import LibrarianChat
+from librarian.librarian_maintenance import LibrarianMaintenance
+from librarian.librarian_utils import find_token, find_wallet, safe_read_json_dict
 
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Iterable, Any, Deque, Dict, List, Optional, Set, Tuple
+from glob import glob as _glob
 
 import psutil
 from core.live_config import config
@@ -41,100 +47,148 @@ from librarian.rules import telegram_auto_track
 from utils.logger import log_event
 from utils.service_status import update_status
 
-# -----------------------------------
-# CONFIG
-# -----------------------------------
-
-
-# --- Config moved to librarian_config.py ---
-from librarian.librarian_config import RUNTIME_ROOT, LOGS_ROOT, LIBRARY_ROOT, GENRES, JSONL_SOURCES, DISK_SCAN_INTERVAL_SEC, STATUS_HEARTBEAT_SECONDS, MAX_EVENTS_PER_TYPE, MAX_TOKEN_EVENTS, MAX_WALLET_EVENTS
-
-from glob import glob as _glob
-
-def _safe_iter_jsonl(pathlike: str | Path):
-    """
-    Yield JSON objects from a .jsonl or .jsonl.gz file safely.
-    """
-    p = Path(pathlike)
-    if not p.exists() or p.is_dir():
-        return
-    try:
-        if str(p).endswith(".gz"):
-            with gzip.open(p, "rt", encoding="utf-8", errors="ignore") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        yield json.loads(line)
-                    except Exception:
-                        continue
-        else:
-            with open(p, "r", encoding="utf-8", errors="ignore") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        yield json.loads(line)
-                    except Exception:
-                        continue
-    except Exception:
-        return
-
-def _iter_glob_jsonl(glob_pattern: str):
-    """
-    Yield jsonl events from all files matching the glob pattern, safely.
-    """
-    if not glob_pattern:
-        return
-    for p in _glob(glob_pattern):
-        try:
-            for x in _safe_iter_jsonl(p):
-                yield x
-        except Exception:
-            continue
-
-
-@dataclass
-class TokenRecord:
-    token: str
-    last_ts: float = 0.0
-    events: Deque[dict] = field(default_factory=lambda: deque(maxlen=MAX_TOKEN_EVENTS))
-    tags: Set[str] = field(default_factory=set)
-    scores: Deque[dict] = field(default_factory=lambda: deque(maxlen=256))  # keep last N scoring snapshots
-    chart: Dict[str, Any] = field(default_factory=dict)   # last known chart metrics
-    meta: Dict[str, Any] = field(default_factory=dict)    # last known token metadata
-    scanners: Set[str] = field(default_factory=set)       # sources that touched this token
-
-
-
-
-
-@dataclass
-class WalletRecord:
-    wallet: str
-    last_ts: float = 0.0
-    events: Deque[dict] = field(default_factory=lambda: deque(maxlen=MAX_WALLET_EVENTS))
-    reputation: float = 0.0
-    tags: Set[str] = field(default_factory=set)
-    clusters: Set[str] = field(default_factory=set)  # cluster ids if you use them
-    meta: Dict[str, Any] = field(default_factory=dict)
 
 
 class DataLibrarian:
+    def catalog_influencer(self, influencer: Dict[str, Any]):
+        """
+        Catalog a Telegram influencer/admin profile for analytics and scoring.
+        """
+        if not hasattr(self, 'influencer_store'):
+            self.influencer_store = {}
+        user = influencer.get('user')
+        if user:
+            self.influencer_store[user] = influencer
+            log_event(f"[Librarian] Cataloged influencer: {user}")
+
+    def blacklist_source(self, source: Dict[str, Any]):
+        """
+        Blacklist a Telegram user/group for scam/rug detection.
+        """
+        if not hasattr(self, 'blacklist_store'):
+            self.blacklist_store = {}
+        user = source.get('user')
+        group = source.get('group')
+        key = f"{group}:{user}"
+        self.blacklist_store[key] = source
+        log_event(f"[Librarian] Blacklisted source: {key}")
+    def ingest_telegram_message(self, msg: Dict[str, Any]):
+        """
+        Ingest a structured Telegram message and update all relevant profiles.
+        msg: {
+            'group': str,
+            'user': str,
+            'text': str,
+            'keywords': List[str],
+            'sentiment': float,
+            'wallets': List[str],
+            'tokens': List[str],
+            'timestamp': str
+        }
+        """
+        group = msg.get('group')
+        user = msg.get('user')
+        text = msg.get('text')
+        keywords = msg.get('keywords', [])
+        sentiment = msg.get('sentiment')
+        wallets = msg.get('wallets', [])
+        tokens = msg.get('tokens', [])
+        timestamp = msg.get('timestamp')
+
+        # User profile/activity
+        if user:
+            profile = {
+                'last_message': text,
+                'last_group': group,
+                'last_keywords': keywords,
+                'last_sentiment': sentiment,
+                'last_wallets': wallets,
+                'last_tokens': tokens,
+                'last_timestamp': timestamp
+            }
+            self.ingest_telegram_user(user, profile)
+            self.update_telegram_activity(user, {
+                'group': group,
+                'text': text,
+                'keywords': keywords,
+                'sentiment': sentiment,
+                'wallets': wallets,
+                'tokens': tokens,
+                'timestamp': timestamp
+            })
+
+        # Token profile/mentions
+        for token in tokens:
+            self.token.ingest_token_profile({
+                'contract': token,
+                'source': 'telegram',
+                'last_mentioned_by': user,
+                'last_group': group,
+                'last_keywords': keywords,
+                'last_sentiment': sentiment,
+                'last_timestamp': timestamp
+            })
+
+        # Group profile/activity
+        if group:
+            if not hasattr(self, 'group_memory'):
+                self.group_memory = {}
+            group_profile = self.group_memory.setdefault(group, {})
+            group_profile['last_message'] = text
+            group_profile['last_user'] = user
+            group_profile['last_keywords'] = keywords
+            group_profile['last_sentiment'] = sentiment
+            group_profile['last_wallets'] = wallets
+            group_profile['last_tokens'] = tokens
+            group_profile['last_timestamp'] = timestamp
+
+        # Keyword tracking
+        if not hasattr(self, 'keyword_store'):
+            self.keyword_store = {}
+        for kw in keywords:
+            kw_data = self.keyword_store.setdefault(kw, {'count': 0, 'last_context': []})
+            kw_data['count'] += 1
+            kw_data['last_context'].append({'group': group, 'user': user, 'text': text, 'timestamp': timestamp})
+            if len(kw_data['last_context']) > 10:
+                kw_data['last_context'] = kw_data['last_context'][-10:]
+
+        # Wallet tracking
+        for wallet in wallets:
+            self.wallet.register_wallet_intel(wallet, {'traits': {'telegram_mentioned'}, 'last_seen': timestamp})
     """
     One librarian to rule them all. Central ingestion, normalization, and indexing.
     """
 
     def __init__(self):
-        # Delegate to split modules
         self.stream = LibrarianStream()
         self.token = LibrarianToken()
         self.wallet = LibrarianWallet()
         self.nlp = LibrarianNLP()
+        self.telegram = LibrarianTelegram()
+    
+    def ingest_telegram_user(self, user_id: str, profile: Dict[str, Any]):
+        """
+        Ingest or update a Telegram user's profile.
+        """
+        self.telegram.ingest_user_profile(user_id, profile)
 
-        # Keep original attributes for compatibility
+    def update_telegram_activity(self, user_id: str, activity: Dict[str, Any]):
+        """
+        Update Telegram user activity log.
+        """
+        self.telegram.update_activity(user_id, activity)
+
+    def score_telegram_user(self, user_id: str) -> float:
+        """
+        Get the score for a Telegram user.
+        """
+        return self.telegram.score_user(user_id)
+
+    def get_telegram_user_profile(self, user_id: str) -> Dict[str, Any]:
+        """
+        Get the profile for a Telegram user.
+        """
+        return self.telegram.get_user_profile(user_id)
         self.persistence_dir = "/home/ubuntu/nyx/runtime/library/"
         self.token_memory = {}
         self.wallet_memory = {}
@@ -167,25 +221,25 @@ class DataLibrarian:
         self._skip_sample_window_start = 0.0
         self._skipped_samples_path = "/home/ubuntu/nyx/runtime/monitor/skipped_stream_samples.jsonl"
 
-# --- inside class DataLibrarian ---------------------------------------------
+
+
 
     def _ensure_maps(self):
-        # idempotent initializers
-        if not hasattr(self, "token_tags"):   self.token_tags = {}          # {token: set([...])}
-        if not hasattr(self, "wallet_tags"):  self.wallet_tags = {}         # {wallet: set([...])}
-        if not hasattr(self, "seen_tokens"):  self.seen_tokens = {}         # metadata cache
-        if not hasattr(self, "seen_wallets"): self.seen_wallets = {}        # metadata cache
-        if not hasattr(self, "seen_x_posts"): self.seen_x_posts = {}        # cross-link cache
+        if not hasattr(self, "token_tags"):   self.token_tags = {}
+        if not hasattr(self, "wallet_tags"):  self.wallet_tags = {}
+        if not hasattr(self, "seen_tokens"):  self.seen_tokens = {}
+        if not hasattr(self, "seen_wallets"): self.seen_wallets = {}
+        if not hasattr(self, "seen_x_posts"): self.seen_x_posts = {}
 
-    def _save_json(self, obj, filename: str):
+    def _save_json(self, obj: Any, filename: str):
         import json, os
-        os.makedirs(self.runtime_dir, exist_ok=True)  # make sure you have self.runtime_dir set up
+        os.makedirs(self.runtime_dir, exist_ok=True)
         path = os.path.join(self.runtime_dir, filename)
         try:
             with open(path, "w") as f:
                 json.dump(obj, f, indent=2)
         except Exception:
-            pass  # keep non-fatal
+            pass
 
     def tag_token(self, token: str, tag: str):
         """
@@ -200,7 +254,6 @@ class DataLibrarian:
             tags = set()
             self.token_tags[token] = tags
         tags.add(tag)
-        # persist as list for json
         serializable = {k: sorted(list(v)) for k, v in self.token_tags.items()}
         self._save_json(serializable, "token_tags.json")
 
@@ -234,23 +287,14 @@ class DataLibrarian:
                 f.write(json.dumps(payload, ensure_ascii=False) + "\n")
         except Exception:
 
-            # --- Dataclasses moved to librarian_models.py ---
-            from librarian.librarian_models import TokenRecord, WalletRecord
-
     def attach_bus(self, bus):
         """
         Attach signal_bus so we mirror its events too (optional).
         """
         self._bus = bus
-
         async def _mirror(payload):
             await self.record_event("bus_signal", payload)
-
-        # Listen to all events by subscribing to a wildcard or register per topic externally.
-        # We'll expose a helper in this librarian to register specific topics explicitly:
-        #   librarian.subscribe_bus("wallet_event")
         self._bus_register_helper = _mirror
-
 
     @property
     def memory_store(self) -> dict:
@@ -259,16 +303,14 @@ class DataLibrarian:
 
     @memory_store.setter
     def memory_store(self, value: dict) -> None:
-        # if someone assigns, merge instead of replacing reference
         if isinstance(value, dict):
             self._memory_store.update(value)
         candidate_mints.update(wallet_buys.keys())
         candidate_mints.update(liq_added)
 
-        # Helpers (stubbed; swap to your actual implementations if needed)
         def get_ohlcv(mint: str, limit: int = 60):
             try:
-                return self.get_ohlcv(mint, limit=limit)  # if your class exposes it
+                return self.get_ohlcv(mint, limit=limit)
             except Exception:
                 return []
 
@@ -363,12 +405,6 @@ class DataLibrarian:
             self._memory_store[key].append(value)
             self.save_memory()
 
-
-
-# --- Learning/strategy logic moved to librarian_learning.py ---
-from librarian.librarian_learning import LibrarianLearning
-
-
     def decay_keywords(self, decay_rate: float = 0.9, min_weight: float = 0.1):
         """
         Gradually decays stored keyword weights to prevent stale bias.
@@ -415,13 +451,11 @@ from librarian.librarian_learning import LibrarianLearning
             if not token:
                 return
 
-            # Ensure name/symbol at minimum
             if not token.get("name"):
                 token["name"] = self.token_name_map.get(contract) or "unknown"
             if not token.get("symbol"):
                 token["symbol"] = token.get("name", "???")[:4].upper()
 
-            # Infer theme from keywords
             name_lower = token.get("name", "").lower()
             matched = [
                 theme for theme in self.theme_keywords
@@ -429,7 +463,6 @@ from librarian.librarian_learning import LibrarianLearning
             ]
             token["theme"] = matched or []
 
-            # Wallet overlap tags
             overlap_tags = []
             for addr in token.get("wallets", []):
                 wallet_info = self.wallet_memory.get(addr, {})
@@ -438,7 +471,6 @@ from librarian.librarian_learning import LibrarianLearning
 
             token["wallet_tags"] = list(set(overlap_tags))
 
-            # Save updated enriched record
             self.seen_tokens[contract] = token
             self._save_json(self.seen_tokens, "seen_tokens.json")
 
@@ -573,8 +605,6 @@ from librarian.librarian_learning import LibrarianLearning
         self._memory_store = store
         return pruned
 
-
-
     def _first_base58(self, *args):
         for f in args:
             if isinstance(f, str):
@@ -605,14 +635,12 @@ from librarian.librarian_learning import LibrarianLearning
         if not isinstance(event, dict):
             return None, None
 
-        # direct fields first
         contract = (
             event.get("contract")
             or event.get("mint")
             or event.get("token")
             or event.get("program_id")
         )
-        # normalize direct field if it isn't already base58-ish
         if not (isinstance(contract, str) and _BASE58_RE.fullmatch(contract)):
             contract = self._first_base58(
                 contract,
@@ -624,14 +652,12 @@ from librarian.librarian_learning import LibrarianLearning
                 event.get("raw"),
             )
 
-        # name/symbol
         token_name = (
             event.get("token_name")
             or event.get("symbol")
             or event.get("name")
         )
 
-        # try tokens[] objects for richer hints
         tokens = event.get("tokens") or []
         for t in tokens:
             if isinstance(t, dict):
@@ -650,7 +676,6 @@ from librarian.librarian_learning import LibrarianLearning
         try:
             contract, token_name = self._pick_contract(event)
 
-            # hard gate: must have at least one identifier
             if not (contract or token_name):
                 logging.warning("[Librarian] Skipped stream event with no contract or token name")
                 return
@@ -667,9 +692,7 @@ from librarian.librarian_learning import LibrarianLearning
             timestamp   = event.get("timestamp") or time.time()
             logs        = event.get("logs")
 
-            # === tag seen items ===
             for t in token_list:
-                # accept strings and dicts
                 if isinstance(t, str):
                     self.tag_token(t, "stream_seen")
                 elif isinstance(t, dict):
@@ -685,7 +708,6 @@ from librarian.librarian_learning import LibrarianLearning
                     if addr:
                         self.tag_wallet(addr, "stream_seen")
 
-            # === persist token contract metadata (index by contract if present, else by name) ===
             key = contract or token_name
             self.seen_tokens[key] = {
                 "seen_at": time.time(),
@@ -699,7 +721,6 @@ from librarian.librarian_learning import LibrarianLearning
             }
             self._save_json(self.seen_tokens, "seen_tokens.json")
 
-            # === save originating wallet metadata ===
             if wallet:
                 self.seen_wallets[wallet] = {
                     "contract": contract,
@@ -709,7 +730,6 @@ from librarian.librarian_learning import LibrarianLearning
                 }
                 self._save_json(self.seen_wallets, "seen_wallets.json")
 
-            # === link X metadata and push keywords to meta store ===
             if x_data:
                 self.seen_x_posts[key] = {
                     "timestamp": time.time(),
@@ -719,7 +739,6 @@ from librarian.librarian_learning import LibrarianLearning
                 }
                 self._save_json(self.seen_x_posts, "seen_x_posts.json")
 
-                # also feed meta_keywords if available
                 kw = [k for k in (x_data.get("keywords") or []) if isinstance(k, str)]
                 if kw:
                     try:
@@ -728,7 +747,6 @@ from librarian.librarian_learning import LibrarianLearning
                     except Exception:
                         pass
 
-            # === record trace ===
             self.record_signal({
                 "source": source,
                 "signature": signature,
@@ -742,7 +760,6 @@ from librarian.librarian_learning import LibrarianLearning
                 "token_name": token_name,
             })
 
-            # === optional enrich (only if we have a contract) ===
             if contract:
                 with contextlib.suppress(Exception):
                     self._enrich_token_profile(contract)
@@ -802,9 +819,6 @@ from librarian.librarian_learning import LibrarianLearning
                 "last_status_beat": self._last_status_beat,
             }
 
-
-
-
     def trim_token_history(self, max_entries: int = 500, max_age_days: int = None):
         """
         Trim token history by max entries or age.
@@ -861,12 +875,6 @@ from librarian.librarian_learning import LibrarianLearning
         if isinstance(meta, dict) and meta:
             rec.meta.update(meta)
 
-
-
-    # Delegation to new modules
-    from librarian.librarian_chat import LibrarianChat
-    from librarian.librarian_maintenance import LibrarianMaintenance
-
     def setup_delegates(self):
         self.chat = self.LibrarianChat(self.runtime)
         self.maintenance = self.LibrarianMaintenance(self)
@@ -877,10 +885,6 @@ from librarian.librarian_learning import LibrarianLearning
     async def ingest_records(self, kind: str, records: list[dict]) -> None:
         await self.chat.ingest_records(kind, records)
 
-
-
-
-    # === Build context snapshot for a token ===
     async def build_context(self, token: str) -> dict:
         """
         Build a rich context dictionary about a token for scoring, evaluation, or analysis.
@@ -916,10 +920,8 @@ from librarian.librarian_learning import LibrarianLearning
         }
 
         try:
-            # Recall persisted snapshot
             saved = recall(f"token:{token}", default={})
 
-            # Merge stored values
             context["metadata"]     = saved.get("metadata", {})
             context["tags"]         = saved.get("tags", [])
             context["chart"]        = saved.get("chart_data", {})
@@ -929,7 +931,6 @@ from librarian.librarian_learning import LibrarianLearning
             context["nft"]          = saved.get("nft", {})
             context["risk_flags"]   = saved.get("risk_flags", [])
 
-            # Pull live memory enrichments
             token_data = self.token_memory.get(token, {})
             associated_wallets = token_data.get("wallets", [])
             associated_x        = token_data.get("x_mentions", [])
@@ -959,9 +960,6 @@ from librarian.librarian_learning import LibrarianLearning
         return self.enrich_context_with_extras(context)
 
 
-
-
-# --- Classification helpers moved to librarian_classify.py ---
 
 def _ensure_dir(p: Path):
     p.mkdir(parents=True, exist_ok=True)
@@ -1014,25 +1012,21 @@ async def archive_to_library(self, ev: dict):
         arr.append({"ts": ts, "type": etype, "token": token, "wallet": wallet, "topics": topics})
         if len(arr) > 5000: del arr[: len(arr) - 5000]
 
-        # topics
         for t in topics:
             ta = lib_ix["by_topic"].setdefault(t, [])
             ta.append({"ts": ts, "type": etype, "token": token, "wallet": wallet, "genre": genre})
             if len(ta) > 5000: del ta[: len(ta) - 5000]
 
-        # token
         if token:
             tt = lib_ix["by_token"].setdefault(token, [])
             tt.append({"ts": ts, "type": etype, "genre": genre, "topics": topics, "wallet": wallet})
             if len(tt) > 5000: del tt[: len(tt) - 5000]
 
-        # wallet
         if wallet:
             ww = lib_ix["by_wallet"].setdefault(wallet, [])
             ww.append({"ts": ts, "type": etype, "genre": genre, "topics": topics, "token": token})
             if len(ww) > 5000: del ww[: len(ww) - 5000]
 
-        # Optional: quick heuristics for wallet class (you can override elsewhere)
         if genre == "profits" and wallet:
             if lib_ix["wallet_class"].get(wallet) != "bad":
                 lib_ix["wallet_class"][wallet] = "good"
@@ -1040,7 +1034,6 @@ async def archive_to_library(self, ev: dict):
             if lib_ix["wallet_class"].get(wallet) != "good":
                 lib_ix["wallet_class"][wallet] = "bad"
 
-        # Persist a light heartbeat periodically
         if int(ts) % 300 == 0:
             self.save_memory()
 
@@ -1059,16 +1052,10 @@ def query_by_topic(self, topic: str, limit: int = 200) -> list:
 def get_wallet_class(self, wallet: str) -> str:
     return self._memory_store.get("_library_index", {}).get("wallet_class", {}).get(wallet, "")
 
-# ------------- helpers --------------
 
-from librarian.librarian_utils import find_token, find_wallet, safe_read_json_dict
 
-# ...existing code...
-
-# -----------------------------------------------------------------------------
-# Singleton & bootstrap
-# -----------------------------------------------------------------------------
 librarian = DataLibrarian()
 
 async def run_librarian():
     await librarian.start()
+

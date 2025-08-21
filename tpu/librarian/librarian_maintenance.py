@@ -1,5 +1,4 @@
 # librarian_maintenance.py
-# Maintenance routines split from data_librarian.py
 
 from datetime import datetime
 from pathlib import Path
@@ -36,5 +35,3 @@ class LibrarianMaintenance:
                 log_event(f"[Maintenance] Pruned {n} memory entries")
         except Exception as e:
             logging.warning(f"[Maintenance] Error during upkeep: {e}")
-
-        # Additional rotation/compaction logic can be added here

@@ -28,6 +28,49 @@ from utils.volume_utils import detect_volume_spike  # volume
 
 
 class ChartCortex:
+    # --- Supervisor Integration Hooks ---
+    def receive_chart_signal(self, token_context: Dict[str, Any], chart_insights: Dict[str, Any]):
+        """
+        Receive chart signals broadcast from supervisor or other modules.
+        Can be used to update internal state, memory, or trigger analytics.
+        """
+        log_event(f"[ChartCortex] Received chart signal for {token_context.get('token_address')}: {chart_insights}")
+        # Optionally update memory or trigger further analysis
+
+    def update_persona_context(self, persona_context: Dict[str, Any]):
+        """
+        Receive persona context updates for adaptive charting logic.
+        """
+        log_event(f"[ChartCortex] Persona context updated: {persona_context}")
+        # Optionally adapt scoring or pattern detection based on persona traits/mood
+
+    def receive_analytics_update(self, update: Dict[str, Any]):
+        """
+        Receive analytics/state updates for unified decision-making.
+        """
+        log_event(f"[ChartCortex] Analytics update received: {update}")
+
+    def build_feature_frame(self, token_context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Build and return feature frame for shared analytics (DataFrame as dict).
+        """
+        ohlcv = token_context.get("ohlcv") or []
+        df = self._normalize_ohlcv(ohlcv)
+        if df is not None:
+            df = self._build_feature_frame(df)
+            return df.to_dict(orient="list")
+        return {}
+
+    def contribute_features(self, token_context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Contribute additional chart-derived features for cross-module analytics.
+        """
+        insights = self.analyze_token(token_context)
+        return {
+            "chart_score": insights.get("chart_score", 0.0),
+            "trend": insights.get("trend", "unknown"),
+            "volatility": insights.get("volatility", "unknown"),
+        }
     """
     Centralized chart analysis:
       - Pulls recent OHLCV

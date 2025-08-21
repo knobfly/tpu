@@ -1,5 +1,4 @@
 # librarian_nlp.py
-# Social/X/TG/NLP-related enrichment, keyword/theme extraction, and context building for DataLibrarian.
 
 import logging
 from typing import Dict, Any, List, Set

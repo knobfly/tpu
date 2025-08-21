@@ -42,6 +42,3 @@ STATUS_HEARTBEAT_SECONDS = 30
 MAX_EVENTS_PER_TYPE      = 5000     # global ring buffer per event type
 MAX_TOKEN_EVENTS         = 2000     # per token
 MAX_WALLET_EVENTS        = 2000     # per wallet
-# librarian_config.py
-# Configuration and runtime setup logic for DataLibrarian.
-

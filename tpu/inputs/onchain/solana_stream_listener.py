@@ -458,6 +458,11 @@ async def stream_solana_logs():
 
     backoff = 1.5
     max_backoff = 30.0
+    # --- Periodic summary state ---
+    summary_last_emit = time.time()
+    tokens_seen = set()
+    wallets_seen = set()
+    events_seen = 0
 
     while True:
         try:
@@ -471,6 +476,44 @@ async def stream_solana_logs():
                     await _drain_ctrl(ws)
                     raw = await ws.recv()
                     data = json.loads(raw) if isinstance(raw, (str, bytes, bytearray)) else raw
+
+                    events_seen += 1
+
+                    # --- Track tokens/wallets from events ---
+                    if isinstance(data, dict) and "method" in data and "params" in data:
+                        method = data["method"]
+                        params = data["params"] or {}
+                        value = params.get("result") or params.get("value") or {}
+                        # Try to extract token/wallet info from logs/account/program events
+                        if method == "logsNotification":
+                            ev = _normalize_event_from_logs(value)
+                            token = ev.get("token")
+                            wallet = ev.get("wallet")
+                            if token:
+                                tokens_seen.add(token)
+                            if wallet:
+                                wallets_seen.add(wallet)
+                        elif method == "accountNotification":
+                            acc_info = (value or {}).get("value") or {}
+                            token = acc_info.get("mint")
+                            owner = acc_info.get("owner")
+                            if token:
+                                tokens_seen.add(token)
+                            if owner:
+                                wallets_seen.add(owner)
+                        elif method == "programNotification":
+                            ev = _normalize_event_from_program(params.get("subscription"), value, params.get("context", {}).get("slot"))
+                            for t in ev.get("tokens", []):
+                                tokens_seen.add(t)
+                            for w in ev.get("wallets", []):
+                                wallets_seen.add(w)
+
+                    # --- Emit summary log every 15 seconds ---
+                    now = time.time()
+                    if now - summary_last_emit > 15:
+                        log_event(f"[SolanaStream] Summary: {len(tokens_seen)} tokens, {len(wallets_seen)} wallets, {events_seen} events in last {int(now-summary_last_emit)}s.")
+                        summary_last_emit = now
+                        events_seen = 0
 
                     if isinstance(data, dict) and "result" in data and "id" in data:
                         _handle_rpc_ack(data)

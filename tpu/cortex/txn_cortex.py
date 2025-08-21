@@ -1,4 +1,32 @@
 class TxnCortex:
+    # --- Supervisor Integration Hooks ---
+    def receive_chart_signal(self, token_context: dict, chart_insights: dict):
+        """
+        Receive chart signals broadcast from supervisor or other modules.
+        Can be used to update transaction analytics or trigger scoring.
+        """
+        pass
+
+    def update_persona_context(self, persona_context: dict):
+        """
+        Receive persona context updates for adaptive transaction logic.
+        """
+        pass
+
+    def receive_analytics_update(self, update: dict):
+        """
+        Receive analytics/state updates for unified decision-making.
+        """
+        pass
+
+    def contribute_features(self, token_context: dict) -> dict:
+        """
+        Contribute transaction-derived features for cross-module analytics.
+        """
+        # Example: Use analyze_transactions to extract features
+        # This assumes you have access to recent_txns and required functions
+        # For now, returns empty dict (to be implemented with real context)
+        return {}
     def __init__(self, memory):
         self.memory = memory
 

@@ -1,4 +1,3 @@
-# ...existing code...
 def get_memory(key: str, default=None):
 	"""
 	Proxy to persistent memory recall.
@@ -71,6 +70,3 @@ class LibrarianMemory:
 					self._memory_store = json.load(f)
 			except Exception as e:
 				print(f"[LibrarianMemory] Failed to load memory: {e}")
-# librarian_memory.py
-# Memory management, persistence, and recall logic for DataLibrarian.
-

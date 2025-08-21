@@ -106,6 +106,66 @@ class TelegramGroupScanner:
 
     # ---------- message handling ----------
     async def _scan_message(self, event):
+            # --- Spam/Flood Detection ---
+            spam_tracker = getattr(self, 'spam_tracker', None)
+            if spam_tracker is None:
+                from collections import defaultdict
+                spam_tracker = defaultdict(lambda: {'count': 0, 'last': 0})
+                self.spam_tracker = spam_tracker
+            now = time.time()
+            sender = None
+            try:
+                sender_ent = await event.get_sender()
+                sender = getattr(sender_ent, 'username', None) or str(getattr(sender_ent, 'id', ''))
+            except Exception:
+                sender = None
+            spam_key = f"{group_name}:{sender}"
+            rec = spam_tracker[spam_key]
+            if now - rec['last'] < 5:
+                rec['count'] += 1
+            else:
+                rec['count'] = 1
+            rec['last'] = now
+            if rec['count'] > 5:
+                logging.info(f"[SpamDetect] Ignoring flood from {sender} in {group_name}")
+                return
+
+            # --- Influencer Profiling ---
+            influencer_tracker = getattr(self, 'influencer_tracker', None)
+            if influencer_tracker is None:
+                from collections import defaultdict
+                influencer_tracker = defaultdict(lambda: {'count': 0, 'last': 0})
+                self.influencer_tracker = influencer_tracker
+            influencer_rec = influencer_tracker[sender]
+            influencer_rec['count'] += 1
+            influencer_rec['last'] = now
+            if influencer_rec['count'] > 20:
+                try:
+                    from librarian.data_librarian import librarian
+                    librarian.catalog_influencer({
+                        'user': sender,
+                        'group': group_name,
+                        'count': influencer_rec['count'],
+                        'last': datetime.utcnow().isoformat()
+                    })
+                except Exception:
+                    pass
+
+            # --- Scam/Rug Signal Detection ---
+            scam_keywords = ["rug", "scam", "exit", "pull", "hack", "exploit", "stolen", "drain"]
+            if any(k in text.lower() for k in scam_keywords):
+                try:
+                    from librarian.data_librarian import librarian
+                    librarian.blacklist_source({
+                        'user': sender,
+                        'group': group_name,
+                        'text': text,
+                        'timestamp': datetime.utcnow().isoformat()
+                    })
+                    logging.info(f"[ScamDetect] Blacklisted source {sender} in {group_name}")
+                except Exception:
+                    pass
+                return
         try:
             update_status("telegram_group_scanner")
 
@@ -193,6 +253,22 @@ class TelegramGroupScanner:
                             # @mentions
                             if isinstance(ent, MessageEntityMention):
                                 handle = msg.message[ent.offset + 1: ent.offset + ent.length]
+            # --- Structured ingest to librarian ---
+            from librarian.data_librarian import librarian
+            msg_obj = {
+                'group': group_name,
+                'user': None,
+                'text': text,
+                'keywords': [],
+                'sentiment': None,
+                'wallets': [],
+                'tokens': [m.replace('$', '') for m in matches],
+                'timestamp': datetime.utcnow().isoformat()
+            }
+            try:
+                librarian.ingest_telegram_message(msg_obj)
+            except Exception as e:
+                logging.warning(f"[TG GroupScanner] librarian ingest failed: {e}")
                                 if handle:
                                     await self._join_from_handle_or_url(client, handle)
 

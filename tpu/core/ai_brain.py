@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 import asyncio
 import logging
 import time
@@ -9,7 +8,6 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-# === LLM Bridge ===
 from core.brain_hook_integrator import (
     detect_meta_trend,
     enrich_token_with_llm,
@@ -227,8 +225,8 @@ class AIBrainExtendedMixin:
                 "type": "ai_decision",
                 "decision": asdict(decision)
             })
-        except Exception:
-            pass
+        except Exception as e:
+            logging.warning(f"[AIBrainExtendedMixin] event_bus emit failed: {e}")
 
         return decision
 

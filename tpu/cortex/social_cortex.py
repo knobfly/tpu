@@ -10,25 +10,28 @@ from utils.keyword_tools import extract_keywords
 
 
 class SocialCortex:
+    def __init__(self, memory):
+        self.memory = memory
+        
     # --- Supervisor Integration Hooks ---
     def receive_chart_signal(self, token_context: dict, chart_insights: dict):
         """
         Receive chart signals broadcast from supervisor or other modules.
         Can be used to update social scoring or trigger analytics.
         """
-        pass
+        print(f"[SocialCortex] Received chart signal for {token_context.get('token_address')}: {chart_insights}")
 
     def update_persona_context(self, persona_context: dict):
         """
         Receive persona context updates for adaptive social logic.
         """
-        pass
+        print(f"[SocialCortex] Persona context updated: {persona_context}")
 
     def receive_analytics_update(self, update: dict):
         """
         Receive analytics/state updates for unified decision-making.
         """
-        pass
+        print(f"[SocialCortex] Analytics update received: {update}")
 
     def contribute_features(self, token_context: dict) -> dict:
         """
@@ -40,8 +43,7 @@ class SocialCortex:
             "mention_count": insights.get("mention_count", 0),
             "reactivity_score": insights.get("reactivity_score", 0),
         }
-    def __init__(self, memory):
-        self.memory = memory
+
 
     def analyze_sentiment(self, token_data: dict) -> dict:
         token_address = token_data.get("token_address")

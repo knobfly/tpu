@@ -50,111 +50,7 @@ from utils.service_status import update_status
 
 
 class DataLibrarian:
-    def catalog_influencer(self, influencer: Dict[str, Any]):
-        """
-        Catalog a Telegram influencer/admin profile for analytics and scoring.
-        """
-        if not hasattr(self, 'influencer_store'):
-            self.influencer_store = {}
-        user = influencer.get('user')
-        if user:
-            self.influencer_store[user] = influencer
-            log_event(f"[Librarian] Cataloged influencer: {user}")
 
-    def blacklist_source(self, source: Dict[str, Any]):
-        """
-        Blacklist a Telegram user/group for scam/rug detection.
-        """
-        if not hasattr(self, 'blacklist_store'):
-            self.blacklist_store = {}
-        user = source.get('user')
-        group = source.get('group')
-        key = f"{group}:{user}"
-        self.blacklist_store[key] = source
-        log_event(f"[Librarian] Blacklisted source: {key}")
-    def ingest_telegram_message(self, msg: Dict[str, Any]):
-        """
-        Ingest a structured Telegram message and update all relevant profiles.
-        msg: {
-            'group': str,
-            'user': str,
-            'text': str,
-            'keywords': List[str],
-            'sentiment': float,
-            'wallets': List[str],
-            'tokens': List[str],
-            'timestamp': str
-        }
-        """
-        group = msg.get('group')
-        user = msg.get('user')
-        text = msg.get('text')
-        keywords = msg.get('keywords', [])
-        sentiment = msg.get('sentiment')
-        wallets = msg.get('wallets', [])
-        tokens = msg.get('tokens', [])
-        timestamp = msg.get('timestamp')
-
-        # User profile/activity
-        if user:
-            profile = {
-                'last_message': text,
-                'last_group': group,
-                'last_keywords': keywords,
-                'last_sentiment': sentiment,
-                'last_wallets': wallets,
-                'last_tokens': tokens,
-                'last_timestamp': timestamp
-            }
-            self.ingest_telegram_user(user, profile)
-            self.update_telegram_activity(user, {
-                'group': group,
-                'text': text,
-                'keywords': keywords,
-                'sentiment': sentiment,
-                'wallets': wallets,
-                'tokens': tokens,
-                'timestamp': timestamp
-            })
-
-        # Token profile/mentions
-        for token in tokens:
-            self.token.ingest_token_profile({
-                'contract': token,
-                'source': 'telegram',
-                'last_mentioned_by': user,
-                'last_group': group,
-                'last_keywords': keywords,
-                'last_sentiment': sentiment,
-                'last_timestamp': timestamp
-            })
-
-        # Group profile/activity
-        if group:
-            if not hasattr(self, 'group_memory'):
-                self.group_memory = {}
-            group_profile = self.group_memory.setdefault(group, {})
-            group_profile['last_message'] = text
-            group_profile['last_user'] = user
-            group_profile['last_keywords'] = keywords
-            group_profile['last_sentiment'] = sentiment
-            group_profile['last_wallets'] = wallets
-            group_profile['last_tokens'] = tokens
-            group_profile['last_timestamp'] = timestamp
-
-        # Keyword tracking
-        if not hasattr(self, 'keyword_store'):
-            self.keyword_store = {}
-        for kw in keywords:
-            kw_data = self.keyword_store.setdefault(kw, {'count': 0, 'last_context': []})
-            kw_data['count'] += 1
-            kw_data['last_context'].append({'group': group, 'user': user, 'text': text, 'timestamp': timestamp})
-            if len(kw_data['last_context']) > 10:
-                kw_data['last_context'] = kw_data['last_context'][-10:]
-
-        # Wallet tracking
-        for wallet in wallets:
-            self.wallet.register_wallet_intel(wallet, {'traits': {'telegram_mentioned'}, 'last_seen': timestamp})
     """
     One librarian to rule them all. Central ingestion, normalization, and indexing.
     """
@@ -165,30 +61,6 @@ class DataLibrarian:
         self.wallet = LibrarianWallet()
         self.nlp = LibrarianNLP()
         self.telegram = LibrarianTelegram()
-    
-    def ingest_telegram_user(self, user_id: str, profile: Dict[str, Any]):
-        """
-        Ingest or update a Telegram user's profile.
-        """
-        self.telegram.ingest_user_profile(user_id, profile)
-
-    def update_telegram_activity(self, user_id: str, activity: Dict[str, Any]):
-        """
-        Update Telegram user activity log.
-        """
-        self.telegram.update_activity(user_id, activity)
-
-    def score_telegram_user(self, user_id: str) -> float:
-        """
-        Get the score for a Telegram user.
-        """
-        return self.telegram.score_user(user_id)
-
-    def get_telegram_user_profile(self, user_id: str) -> Dict[str, Any]:
-        """
-        Get the profile for a Telegram user.
-        """
-        return self.telegram.get_user_profile(user_id)
         self.persistence_dir = "/home/ubuntu/nyx/runtime/library/"
         self.token_memory = {}
         self.wallet_memory = {}
@@ -221,8 +93,51 @@ class DataLibrarian:
         self._skip_sample_window_start = 0.0
         self._skipped_samples_path = "/home/ubuntu/nyx/runtime/monitor/skipped_stream_samples.jsonl"
 
+    def _detect_chain(self, contract, program_id, source):
+        """
+        Detect chain from contract, program_id, or source string.
+        Returns: 'sol', 'bsc', 'eth', etc.
+        """
+        contract = str(contract or "").lower()
+        program_id = str(program_id or "").lower()
+        source = str(source or "").lower()
+        if any(x in contract for x in ["sol", "raydium", "orca", "bonk"]):
+            return "sol"
+        if any(x in contract for x in ["bsc", "binance", "cake"]):
+            return "bsc"
+        if any(x in contract for x in ["eth", "ethereum", "uniswap"]):
+            return "eth"
+        if "solana" in source or "solana" in program_id:
+            return "sol"
+        if "bsc" in source or "bsc" in program_id:
+            return "bsc"
+        if "eth" in source or "eth" in program_id:
+            return "eth"
+        return "unknown"
+    
+    def ingest_telegram_user(self, user_id: str, profile: Dict[str, Any]):
+        """
+        Ingest or update a Telegram user's profile.
+        """
+        self.telegram.ingest_user_profile(user_id, profile)
 
+    def update_telegram_activity(self, user_id: str, activity: Dict[str, Any]):
+        """
+        Update Telegram user activity log.
+        """
+        self.telegram.update_activity(user_id, activity)
 
+    def score_telegram_user(self, user_id: str) -> float:
+        """
+        Get the score for a Telegram user.
+        """
+        return self.telegram.score_user(user_id)
+
+    def get_telegram_user_profile(self, user_id: str) -> Dict[str, Any]:
+        """
+        Get the profile for a Telegram user.
+        """
+        return self.telegram.get_user_profile(user_id)
 
     def _ensure_maps(self):
         if not hasattr(self, "token_tags"):   self.token_tags = {}
@@ -305,30 +220,29 @@ class DataLibrarian:
     def memory_store(self, value: dict) -> None:
         if isinstance(value, dict):
             self._memory_store.update(value)
-        candidate_mints.update(wallet_buys.keys())
-        candidate_mints.update(liq_added)
 
-        def get_ohlcv(mint: str, limit: int = 60):
-            try:
-                return self.get_ohlcv(mint, limit=limit)
-            except Exception:
-                return []
+    def get_ohlcv(self, mint: str, limit: int = 60):
+        try:
+            return self.stream.get_ohlcv(mint, limit=limit)
+        except Exception:
+            return []
 
-        def volume_spike(candles, lookback=30, k=2.0) -> bool:
-            if not candles or len(candles) < lookback + 1:
-                return False
-            vols = [float(c.get("volume", 0)) for c in candles[-(lookback+1):]]
-            recent = vols[-1]
-            base = sum(vols[:-1]) / max(1, len(vols[:-1]))
-            return recent > k * base if base > 0 else False
+    def volume_spike(self, candles, lookback=30, k=2.0) -> bool:
+        if not candles or len(candles) < lookback + 1:
+            return False
+        vols = [float(c.get("volume", 0)) for c in candles[-(lookback+1):]]
+        recent = vols[-1]
+        base = sum(vols[:-1]) / max(1, len(vols[:-1]))
+        return recent > k * base if base > 0 else False
 
+    def rank_tokens(self, candidate_mints, wallet_buys, liq_added, social_counts, stream_counts, min_social_mentions, min_wallet_buys, limit=60):
         ranked: list[tuple[str, float]] = []
         for mint in candidate_mints:
             s_count = social_counts.get(mint, 0)
             w_count = wallet_buys.get(mint, 0)
             st_count = stream_counts.get(mint, 0)
             liq_boost = 1.0 if mint in liq_added else 0.0
-            spike_boost = 1.0 if volume_spike(get_ohlcv(mint)) else 0.0
+            spike_boost = 1.0 if self.volume_spike(self.get_ohlcv(mint)) else 0.0
 
             score = (
                 (1.0 if s_count >= min_social_mentions else 0.0)
@@ -342,9 +256,9 @@ class DataLibrarian:
 
         ranked.sort(
             key=lambda t: (t[1],
-                           wallet_buys.get(t[0], 0),
-                           social_counts.get(t[0], 0),
-                           stream_counts.get(t[0], 0)),
+                wallet_buys.get(t[0], 0),
+                social_counts.get(t[0], 0),
+                stream_counts.get(t[0], 0)),
             reverse=True,
         )
         return [m for (m, _s) in ranked[:max(1, int(limit))]]
@@ -692,6 +606,11 @@ class DataLibrarian:
             timestamp   = event.get("timestamp") or time.time()
             logs        = event.get("logs")
 
+
+            # --- Chain detection ---
+            chain = self._detect_chain(contract, program_id, source)
+            event["chain"] = chain
+
             for t in token_list:
                 if isinstance(t, str):
                     self.tag_token(t, "stream_seen")
@@ -717,8 +636,12 @@ class DataLibrarian:
                 "token_name": token_name,
                 "contract": contract,
                 "x_data": x_data,
+                "chain": chain,
                 "raw": event,
             }
+            # Save by chain for classification
+            chain_tokens = self.seen_tokens.setdefault(f"{chain}_tokens", {})
+            chain_tokens[key] = self.seen_tokens[key]
             self._save_json(self.seen_tokens, "seen_tokens.json")
 
             if wallet:
@@ -727,7 +650,10 @@ class DataLibrarian:
                     "token_name": token_name,
                     "first_seen": time.time(),
                     "event_type": kind,
+                    "chain": chain,
                 }
+                chain_wallets = self.seen_wallets.setdefault(f"{chain}_wallets", {})
+                chain_wallets[wallet] = self.seen_wallets[wallet]
                 self._save_json(self.seen_wallets, "seen_wallets.json")
 
             if x_data:
@@ -736,7 +662,10 @@ class DataLibrarian:
                     "keywords": x_data.get("keywords", []) or [],
                     "poster": x_data.get("poster"),
                     "x_text": x_data.get("text", ""),
+                    "chain": chain,
                 }
+                chain_x_posts = self.seen_x_posts.setdefault(f"{chain}_x_posts", {})
+                chain_x_posts[key] = self.seen_x_posts[key]
                 self._save_json(self.seen_x_posts, "seen_x_posts.json")
 
                 kw = [k for k in (x_data.get("keywords") or []) if isinstance(k, str)]
@@ -758,6 +687,7 @@ class DataLibrarian:
                 "logs": logs,
                 "contract": contract,
                 "token_name": token_name,
+                "chain": chain,
             })
 
             if contract:
@@ -958,7 +888,114 @@ class DataLibrarian:
             logging.warning(f"[Librarian] Failed to build context for {token}: {e}")
 
         return self.enrich_context_with_extras(context)
+    
+    def catalog_influencer(self, influencer: Dict[str, Any]):
+        """
+        Catalog a Telegram influencer/admin profile for analytics and scoring.
+        """
+        if not hasattr(self, 'influencer_store'):
+            self.influencer_store = {}
+        user = influencer.get('user')
+        if user:
+            self.influencer_store[user] = influencer
+            log_event(f"[Librarian] Cataloged influencer: {user}")
 
+    def blacklist_source(self, source: Dict[str, Any]):
+        """
+        Blacklist a Telegram user/group for scam/rug detection.
+        """
+        if not hasattr(self, 'blacklist_store'):
+            self.blacklist_store = {}
+        user = source.get('user')
+        group = source.get('group')
+        key = f"{group}:{user}"
+        self.blacklist_store[key] = source
+        log_event(f"[Librarian] Blacklisted source: {key}")
+  
+    def ingest_telegram_message(self, msg: Dict[str, Any]):
+        """
+        Ingest a structured Telegram message and update all relevant profiles.
+        msg: {
+            'group': str,
+            'user': str,
+            'text': str,
+            'keywords': List[str],
+            'sentiment': float,
+            'wallets': List[str],
+            'tokens': List[str],
+            'timestamp': str
+        }
+        """
+        group = msg.get('group')
+        user = msg.get('user')
+        text = msg.get('text')
+        keywords = msg.get('keywords', [])
+        sentiment = msg.get('sentiment')
+        wallets = msg.get('wallets', [])
+        tokens = msg.get('tokens', [])
+        timestamp = msg.get('timestamp')
+
+        # --- Chain detection for Telegram tokens ---
+        chain_map = {}
+        for token in tokens:
+            chain_map[token] = self._detect_chain(token, None, 'telegram')
+
+        # User profile/activity
+        if user:
+            profile = {
+                'last_message': text,
+                'last_group': group,
+                'last_keywords': keywords,
+                'last_sentiment': sentiment,
+                'last_wallets': wallets,
+                'last_tokens': tokens,
+                'last_timestamp': timestamp
+            }
+            self.ingest_telegram_user(user, profile)
+            self.update_telegram_activity(user, {
+                'group': group,
+                'text': text,
+                'keywords': keywords,
+                'sentiment': sentiment,
+                'wallets': wallets,
+                'tokens': tokens,
+                'timestamp': timestamp
+            })
+
+        # Token profile/mentions
+        for token in tokens:
+    
+        # Group profile/activity
+        if group:
+            if not hasattr(self, 'group_memory'):
+                        # Store by chain for group tokens
+                        for token in tokens:
+                            chain = chain_map.get(token, 'unknown')
+                            chain_groups = self.group_memory.setdefault(f'{chain}_groups', {})
+                            chain_groups[group] = group_profile
+                self.group_memory = {}
+            group_profile = self.group_memory.setdefault(group, {})
+            group_profile['last_message'] = text
+            group_profile['last_user'] = user
+            group_profile['last_keywords'] = keywords
+            group_profile['last_sentiment'] = sentiment
+            group_profile['last_wallets'] = wallets
+            group_profile['last_tokens'] = tokens
+            group_profile['last_timestamp'] = timestamp
+
+        # Keyword tracking
+        if not hasattr(self, 'keyword_store'):
+            self.keyword_store = {}
+        for kw in keywords:
+            kw_data = self.keyword_store.setdefault(kw, {'count': 0, 'last_context': []})
+            kw_data['count'] += 1
+            kw_data['last_context'].append({'group': group, 'user': user, 'text': text, 'timestamp': timestamp})
+            if len(kw_data['last_context']) > 10:
+                kw_data['last_context'] = kw_data['last_context'][-10:]
+
+        # Wallet tracking
+        for wallet in wallets:
+            self.wallet.register_wallet_intel(wallet, {'traits': {'telegram_mentioned'}, 'last_seen': timestamp})
 
 
 def _ensure_dir(p: Path):
@@ -982,6 +1019,10 @@ async def archive_to_library(self, ev: dict):
 
         token = payload.get("token") or payload.get("mint") or payload.get("token_address")
         wallet = payload.get("wallet") or payload.get("wallet_address") or payload.get("owner")
+        chain = payload.get("chain") or self._detect_chain(token, None, etype)
+            if chain == 'unknown':
+                import logging
+                logging.warning(f"[Librarian] archive_to_library: Could not detect chain for token={token} wallet={wallet} type={etype}")
 
         genre = _classify_genre(payload)
         topics = sorted(list(_extract_topics(payload)))
@@ -990,6 +1031,7 @@ async def archive_to_library(self, ev: dict):
             "ts": ts,
             "type": etype,
             "genre": genre,
+            "chain": chain,
             "topics": topics,
             "token": token,
             "wallet": wallet,
@@ -1040,6 +1082,56 @@ async def archive_to_library(self, ev: dict):
     except Exception as e:
         import logging
         logging.warning(f"[Librarian] archive_to_library error: {e}")
+
+def log_trigger_result(self, mint: str, result: dict):
+    if "triggered_scores" not in self.memory:
+        self.memory["triggered_scores"] = {}
+
+    self.memory["triggered_scores"][mint] = {
+        "result": result,
+        "timestamp": self._now()
+    }
+
+
+def promote_token(self, mint: str, context: dict):
+    if "promoted_tokens" not in self.memory:
+        self.memory["promoted_tokens"] = {}
+
+    self.memory["promoted_tokens"][mint] = {
+        "promoted_at": self._now(),
+        "context": context,
+    }
+    self._append_to_index("promotion_queue", mint)
+
+def add_to_watchlist(self, mint: str, context: dict):
+    if "watchlist" not in self.memory:
+        self.memory["watchlist"] = {}
+
+    self.memory["watchlist"][mint] = {
+        "added_at": self._now(),
+        "context": context,
+    }
+    self._append_to_index("watched_tokens", mint)
+
+def ingest_token_context(self, mint: str, context: dict):
+    if "token_contexts" not in self.memory:
+        self.memory["token_contexts"] = {}
+    self.memory["token_contexts"][mint] = context
+    self._append_to_index("discovered_tokens", mint)
+
+def ingest_wallet_profile(self, profile: dict):
+    address = profile.get("address")
+    if not address:
+        return
+
+    if "wallet_profiles" not in self.memory:
+        self.memory["wallet_profiles"] = {}
+
+    self.memory["wallet_profiles"][address] = profile
+
+    tags = profile.get("tags", [])
+    for tag in tags:
+        self._append_to_index(f"wallet_tag::{tag}", address)
 
 def query_by_genre(self, genre: str, limit: int = 200) -> list:
     idx = self._memory_store.get("_library_index", {}).get("by_genre", {}).get(genre, [])

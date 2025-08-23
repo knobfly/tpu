@@ -1,20 +1,14 @@
+
 import asyncio
 import logging
 import time
-
-from inputs.trending.alt_trending_sources import fetch_alt_trending
 from inputs.trending.birdeye_trending import fetch_birdeye_trending
-from inputs.trending.external_trending_sources import (
-    fetch_dexscreener_trending,
-    fetch_gecko_terminal_trending,
-)
 from librarian.data_librarian import librarian
 from special.insight_logger import log_scanner_insight
 from utils.logger import log_event
 from utils.service_status import update_status
 
-_seen = set()
-_trending_results = []
+
 
 
 async def score_and_log_token(entry: dict, source: str):
@@ -131,17 +125,7 @@ async def scan_all_trending():
             else:
                 log_event("⚠️ Birdeye unavailable, falling back to others")
 
-            tasks = [
-                fetch_dexscreener_trending(),
-                fetch_gecko_terminal_trending(),
-                fetch_alt_trending()
-            ]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            for (name, result) in zip(["dexscreener", "geckoterminal", "alt_trending"], results):
-                if isinstance(result, Exception):
-                    logging.warning(f"[TrendRouter] Error in {name}: {result}")
-                    continue
-                sources.append((name, result))
+            # Only process Birdeye trending if available
             for source_name, token_list in sources:
                 for token in token_list:
                     await score_and_log_token(token, source_name)

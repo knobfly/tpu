@@ -1,5 +1,3 @@
-# modules/utils/keyword_engine.py
-
 SNIPE_KEYWORDS = {
     "launch": 3,
     "live": 3,

@@ -70,5 +70,5 @@ class JupiterSwap:
     async def close(self):
         try:
             await self.session.close()
-        except Exception:
-            pass
+        except Exception as e:
+            logging.warning(f"[JupiterSwap] session close failed: {e}")

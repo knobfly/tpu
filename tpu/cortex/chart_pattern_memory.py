@@ -19,8 +19,8 @@ def save_chart_memory(data):
     try:
         with open(MEMORY_FILE, "w") as f:
             json.dump(data, f, indent=2)
-    except:
-        pass
+    except Exception as e:
+        print(f"[chart_pattern_memory] Failed to save chart memory: {e}")
 
 def log_chart_pattern(token_address: str, pattern: str, outcome: str):
     """

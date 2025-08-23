@@ -54,60 +54,12 @@ try:
     from core.token_ledger import set_scores
 except Exception:  # pragma: no cover
     def set_scores(*args, **kwargs):  # type: ignore
-        pass
+        logging.info(f"[set_scores fallback] Called with args={args}, kwargs={kwargs}")
 
 # -------------------------------------------------------------------------
 
 
 class CoreSupervisor:
-    def broadcast_chart_signals(self, token_context: Dict[str, Any], chart_insights: Dict[str, Any]):
-        """
-        Broadcast chart signals and scores to all cortexes and AI/LLM brains.
-        """
-        for name, cortex in (self.cortex_modules or {}).items():
-            if hasattr(cortex, "receive_chart_signal"):
-                cortex.receive_chart_signal(token_context, chart_insights)
-        if self.ai_brain and hasattr(self.ai_brain, "receive_chart_signal"):
-            self.ai_brain.receive_chart_signal(token_context, chart_insights)
-        if self.llm_brain and hasattr(self.llm_brain, "receive_chart_signal"):
-            self.llm_brain.receive_chart_signal(token_context, chart_insights)
-
-    def share_persona_context(self, persona_context: Dict[str, Any]):
-        """
-        Share persona context and feedback with all cortexes and brains.
-        """
-        for name, cortex in (self.cortex_modules or {}).items():
-            if hasattr(cortex, "update_persona_context"):
-                cortex.update_persona_context(persona_context)
-        if self.ai_brain and hasattr(self.ai_brain, "update_persona_context"):
-            self.ai_brain.update_persona_context(persona_context)
-        if self.llm_brain and hasattr(self.llm_brain, "update_persona_context"):
-            self.llm_brain.update_persona_context(persona_context)
-
-    def route_analytics_update(self, update: Dict[str, Any]):
-        """
-        Route analytics/state updates to all modules for unified decision-making.
-        """
-        for name, cortex in (self.cortex_modules or {}).items():
-            if hasattr(cortex, "receive_analytics_update"):
-                cortex.receive_analytics_update(update)
-        if self.ai_brain and hasattr(self.ai_brain, "receive_analytics_update"):
-            self.ai_brain.receive_analytics_update(update)
-        if self.llm_brain and hasattr(self.llm_brain, "receive_analytics_update"):
-            self.llm_brain.receive_analytics_update(update)
-
-    def get_shared_feature_frame(self, token_context: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Build and return a shared feature frame for cross-module analytics.
-        """
-        frame = {}
-        if self.chart and hasattr(self.chart, "build_feature_frame"):
-            frame = self.chart.build_feature_frame(token_context)
-        # Allow other cortexes to contribute features
-        for name, cortex in (self.cortex_modules or {}).items():
-            if hasattr(cortex, "contribute_features"):
-                frame.update(cortex.contribute_features(token_context))
-        return frame
     """
     Blended supervisor:
       - Collects insights from chart/wallet/social/txn/meta/risk cortices
@@ -123,47 +75,72 @@ class CoreSupervisor:
         self.txn = cortices.get("txn")
         self.meta = cortices.get("meta")
         self.risk = cortices.get("risk")
+        self.strategy = cortices.get("strategy")
         self.ai_brain = ai_brain
         self.llm_brain = llm_brain
         self.cortex_modules = cortices  # used by observe_global_state()
+
+    def broadcast_chart_signals(self, token_context: Dict[str, Any], chart_insights: Dict[str, Any]):
+        """
+        Broadcast chart signals and scores to all cortexes and AI/LLM brains, including strategy cortex.
+        """
+        for name, cortex in (self.cortex_modules or {}).items():
+            if hasattr(cortex, "receive_chart_signal"):
+                cortex.receive_chart_signal(token_context, chart_insights)
+        if self.strategy and hasattr(self.strategy, "receive_chart_signal"):
+            self.strategy.receive_chart_signal(token_context, chart_insights)
+        if self.ai_brain and hasattr(self.ai_brain, "receive_chart_signal"):
+            self.ai_brain.receive_chart_signal(token_context, chart_insights)
+        if self.llm_brain and hasattr(self.llm_brain, "receive_chart_signal"):
+            self.llm_brain.receive_chart_signal(token_context, chart_insights)
+
+    def share_persona_context(self, persona_context: Dict[str, Any]):
+        """
+        Share persona context and feedback with all cortexes and brains, including strategy cortex.
+        """
+        for name, cortex in (self.cortex_modules or {}).items():
+            if hasattr(cortex, "update_persona_context"):
+                cortex.update_persona_context(persona_context)
+        if self.strategy and hasattr(self.strategy, "update_persona_context"):
+            self.strategy.update_persona_context(persona_context)
+        if self.ai_brain and hasattr(self.ai_brain, "update_persona_context"):
+            self.ai_brain.update_persona_context(persona_context)
+        if self.llm_brain and hasattr(self.llm_brain, "update_persona_context"):
+            self.llm_brain.update_persona_context(persona_context)
+
+    def route_analytics_update(self, update: Dict[str, Any]):
+        """
+        Route analytics/state updates to all modules for unified decision-making, including strategy cortex.
+        """
+        for name, cortex in (self.cortex_modules or {}).items():
+            if hasattr(cortex, "receive_analytics_update"):
+                cortex.receive_analytics_update(update)
+        if self.strategy and hasattr(self.strategy, "receive_analytics_update"):
+            self.strategy.receive_analytics_update(update)
+        if self.ai_brain and hasattr(self.ai_brain, "receive_analytics_update"):
+            self.ai_brain.receive_analytics_update(update)
+        if self.llm_brain and hasattr(self.llm_brain, "receive_analytics_update"):
+            self.llm_brain.receive_analytics_update(update)
+
+    def get_shared_feature_frame(self, token_context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Build and return a shared feature frame for cross-module analytics, including strategy cortex.
+        """
+        frame = {}
+        if self.chart and hasattr(self.chart, "build_feature_frame"):
+            frame = self.chart.build_feature_frame(token_context)
+        # Allow other cortexes to contribute features
+        for name, cortex in (self.cortex_modules or {}).items():
+            if hasattr(cortex, "contribute_features"):
+                frame.update(cortex.contribute_features(token_context))
+        if self.strategy and hasattr(self.strategy, "contribute_features"):
+            frame.update(self.strategy.contribute_features(token_context))
+        return frame
 
     # --- internal ----------------------------------------------------------
 
     def _token_addr(self, ctx: Dict[str, Any]) -> Optional[str]:
         return ctx.get("token_address") or ctx.get("mint") or ctx.get("token")
-
-    def _aggregate(self, parts: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        parts: dict with keys: chart/wallet/social/txn/meta/risk -> insight dict
-        each insight dict may include its <name>_score numeric key
-        """
-        mapping = {
-            "chart":  "chart_score",
-            "wallet": "wallet_score",
-            "social": "social_score",
-            "txn":    "txn_score",
-            "meta":   "meta_score",
-            "risk":   "risk_score",
-        }
-        total = 0.0
-        reasons = []
-        sub_scores = {}
-        for name, blob in parts.items():
-            key = mapping[name]
-            s = float(blob.get(key, 0.0) or 0.0)
-            sub_scores[key] = s
-            if s > 0:
-                reasons.append({"source": key, "score": s, "details": blob})
-                total += s
-
-        if total >= 25:
-            action = "buy"
-        elif total >= 15:
-            action = "watch"
-        else:
-            action = "ignore"
-
-        return {"total": round(total, 2), "action": action, "reasons": reasons, "sub_scores": sub_scores}
 
     # --- public ------------------------------------------------------------
 
@@ -194,7 +171,28 @@ class CoreSupervisor:
         except Exception as e:
             logging.warning(f"[CoreSupervisor] social analyze failed: {e}")
 
-        # txn (rich path if available)
+
+        # strategy
+        strategy_insights = {}
+        try:
+            if self.strategy:
+                strategy_insights = self.strategy.analyze_strategy(token_context) or {}
+        except Exception as e:
+            logging.warning(f"[CoreSupervisor] strategy analyze failed: {e}")
+
+        # ML predictions available in context
+        ml_price = token_context.get('ml_price_pred')
+        ml_rug = token_context.get('ml_rug_pred')
+        ml_wallet = token_context.get('ml_wallet_pred')
+        # Use ML predictions in scoring, risk, and analytics
+        if ml_rug is not None and ml_rug > 0.7:
+            token_context['risk_flags'] = token_context.get('risk_flags', []) + ['ml_rug_high']
+        if ml_price is not None:
+            token_context['ml_price_score'] = ml_price
+        if ml_wallet is not None:
+            token_context['ml_wallet_behavior'] = ml_wallet
+
+        # txn
         txn_insights = {}
         try:
             if self.txn:
@@ -203,7 +201,6 @@ class CoreSupervisor:
                 else:
                     txns = token_context.get("recent_txns", [])
 
-                # prefer extended signature if cortex supports it
                 try:
                     txn_insights = self.txn.analyze_transactions(
                         token_data=token_context,
@@ -218,7 +215,6 @@ class CoreSupervisor:
                         update_token_txn_memory=update_token_txn_memory,
                     ) or {}
                 except TypeError:
-                    # fall back to simpler signature
                     txn_insights = self.txn.analyze_transactions(token_context) or {}
         except Exception as e:
             logging.warning(f"[CoreSupervisor] txn analyze failed: {e}")
@@ -244,6 +240,7 @@ class CoreSupervisor:
             "chart":  chart_insights,
             "wallet": wallet_insights,
             "social": social_insights,
+            "strategy": strategy_insights,
             "txn":    txn_insights,
             "meta":   meta_insights,
             "risk":   risk_insights,
@@ -269,42 +266,4 @@ class CoreSupervisor:
             logging.warning(f"[CoreSupervisor] set_scores failed: {e}")
 
         return result
-
-    def get_identity_profile(self) -> Dict[str, Any]:
-        if getattr(self, "ai_brain", None) and hasattr(self.ai_brain, "identity_profile"):
-            return self.ai_brain.identity_profile
-        return {
-            "name": "Nyx",
-            "role": "Unknown",
-            "chain": "Unknown",
-            "mission": "Identity profile unavailable.",
-            "drive": "N/A",
-            "soul": "⚠️ Missing identity profile.",
-        }
-
-    def observe_global_state(self) -> Dict[str, Any]:
-        try:
-            observations = {}
-            for name, cortex in (self.cortex_modules or {}).items():
-                if hasattr(cortex, "observe_state"):
-                    observations[name] = cortex.observe_state()
-            return observations
-        except Exception as e:
-            logging.warning(f"[CoreSupervisor] Global state observation failed: {e}")
-            return {}
-
-    # learning hooks
-    def learn(self, signal: Dict[str, Any]) -> None:
-        try:
-            if self.ai_brain and hasattr(self.ai_brain, "learn"):
-                self.ai_brain.learn(signal)
-        except Exception as e:
-            logging.debug(f"[CoreSupervisor] learn hook failed: {e}")
-
-    def log_token_feedback(self, token: str, outcome: str) -> None:
-        try:
-            if self.ai_brain and hasattr(self.ai_brain, "log_token_feedback"):
-                self.ai_brain.log_token_feedback(token, outcome)
-        except Exception as e:
-            logging.debug(f"[CoreSupervisor] feedback hook failed: {e}")
 

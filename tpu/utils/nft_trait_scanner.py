@@ -1,7 +1,4 @@
-# utils/nft_trait_scanner.py
-
 import logging
-
 import aiohttp
 
 ME_COLLECTION_URL = "https://api-mainnet.magiceden.dev/v2/nfts"

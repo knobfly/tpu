@@ -8,7 +8,6 @@ import json
 import logging
 import os
 from typing import Dict, Optional, Tuple
-
 from librarian.data_librarian import librarian
 from utils.fetch_bytecode import fetch_contract_bytecode
 from utils.logger import log_event
@@ -151,8 +150,8 @@ async def _evaluate_similarity_penalty_async(token_address: str) -> int:
                     token_type="bytecode_match",
                     source="honeypot_similarity"
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                logging.warning(f"[HoneypotScanner] record_token_result failed: {e}")
 
             _similarity_cache[token_address] = (_now_ts(), penalty)
             return penalty

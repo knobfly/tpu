@@ -8,7 +8,7 @@ try:
     from core.token_ledger import upsert_event, get_context
 except Exception:  # pragma: no cover
     def upsert_event(*args, **kwargs):  # type: ignore
-        pass
+        logging.info(f"[core_router] upsert_event fallback called with args={args}, kwargs={kwargs}")
     def get_context(token: str) -> Dict[str, Any]:  # type: ignore
         return {}
 
@@ -103,6 +103,10 @@ async def handle_event(event: Dict[str, Any]):
     # 2) Pull the assembled context and run a single evaluate() for this token.
     try:
         ctx = get_context(token) or {}
+        # propagate ML predictions
+        for k in ['ml_price_pred', 'ml_rug_pred', 'ml_wallet_pred']:
+            if k in event:
+                ctx[k] = event[k]
         # normalize minimal fields many cortices expect
         ctx.setdefault("mint", token)
         ctx.setdefault("token_address", token)

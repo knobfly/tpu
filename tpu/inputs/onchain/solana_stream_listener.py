@@ -373,6 +373,7 @@ def _normalize_event_from_program(key: str, acc: dict, ctx_slot: int) -> dict:
 
 async def _route_event(event: dict):
     """Send to Librarian + classifier + stream safety hooks."""
+
     # 1) Persist/learn
     try:
         await librarian.ingest_stream_event(event)
@@ -383,7 +384,40 @@ async def _route_event(event: dict):
     except Exception as e:
         logging.warning(f"[SolanaStream] Classifier failed: {e}")
 
-    # 2) Cheap, log-driven safety heuristics
+
+    # 2) ML Model Inference (price, rug, wallet) and propagate predictions
+    try:
+        from ml.price_predictor import PricePredictor
+        from ml.rug_detector import RugDetector
+        from ml.wallet_behavior_model import WalletBehaviorModel
+        import torch
+
+        # Prepare features from event (customize for your real event schema)
+        price_features = torch.tensor([[event.get('price', 0), event.get('volume', 0)]], dtype=torch.float32)
+        rug_features = torch.tensor([[event.get('lp_locked', 0), event.get('honeypot', 0), event.get('blacklisted', 0), event.get('holders', 0)]], dtype=torch.float32)
+        wallet_features = torch.tensor([[event.get('tx_count', 0), event.get('volume', 0), event.get('alpha_tag', 0)]], dtype=torch.float32)
+
+        # Load models (ideally, load once and cache; here for demo)
+        price_model = PricePredictor(input_dim=2)
+        rug_model = RugDetector(input_dim=4)
+        wallet_model = WalletBehaviorModel(input_dim=3)
+
+        price_pred = price_model(price_features).item()
+        rug_pred = rug_model(rug_features).item()
+        wallet_pred = wallet_model(wallet_features).detach().numpy().tolist()[0]
+
+        # Augment event with ML predictions
+        event['ml_price_pred'] = price_pred
+        event['ml_rug_pred'] = rug_pred
+        event['ml_wallet_pred'] = wallet_pred
+
+        log_event(f"[ML] Price prediction: {price_pred}")
+        log_event(f"[ML] Rug risk: {rug_pred}")
+        log_event(f"[ML] Wallet behavior: {wallet_pred}")
+    except Exception as e:
+        logging.debug(f"[SolanaStream] ML inference skipped: {e}")
+
+    # 3) Cheap, log-driven safety heuristics
     try:
         await _safety_hooks_from_event(event)
     except Exception as e:

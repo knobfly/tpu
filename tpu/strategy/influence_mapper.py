@@ -38,6 +38,20 @@ def score_influence(wallets: list[str]) -> tuple[int, list[str]]:
     score = 0
     reasons = []
 
+    # Advanced: Use PageRank for wallet network influence
+    try:
+        from memory.graph_store import graph_store
+        g = graph_store()
+        pr_scores = g.pagerank_influence(node_type="wallet")
+        for w in wallets:
+            pr = pr_scores.get(w, 0)
+            if pr > 0.01:
+                score += int(pr * 100)
+                reasons.append(f"{w[:6]}... PageRank {pr:.3f}")
+    except Exception as e:
+        reasons.append(f"PageRank error: {e}")
+
+    # Legacy scoring
     for w in wallets:
         entry = influence.get(w, {})
         if not entry:

@@ -114,6 +114,23 @@ class MemoryGraph:
     def get_token_traits(self, token: str) -> List[str]:
         neighbors = self.get_neighbors(token)
         return [n for n in neighbors if self.graph.nodes[n].get("type") == "trait"]
+        # === Influence Scoring ===
+
+    def pagerank_influence(self, node_type: str = "wallet", alpha: float = 0.85) -> dict:
+        """
+        Computes PageRank scores for nodes of a given type (wallet, token, group, etc.)
+        Returns: {node_id: score}
+        """
+        from utils.graph_influence import pagerank_influence
+        # Build edge list for relevant nodes
+        edges = []
+        for src, dst, attrs in self.get_edges():
+            # Only include edges where src or dst is of the requested type
+            src_type = self.graph.nodes.get(src, {}).get("type")
+            dst_type = self.graph.nodes.get(dst, {}).get("type")
+            if src_type == node_type or dst_type == node_type:
+                edges.append((src, dst))
+        return pagerank_influence(edges, alpha=alpha)
 
     def get_wallet_pnl_summary(self, wallet: str) -> Dict[str, float]:
         summary = {"wins": 0, "losses": 0, "pnl_total": 0.0}

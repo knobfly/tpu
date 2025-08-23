@@ -1,4 +1,3 @@
-# utils/crash_guardian.py
 from __future__ import annotations
 import inspect
 import asyncio

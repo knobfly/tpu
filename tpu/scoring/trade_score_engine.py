@@ -8,7 +8,7 @@ from defense.honeypot_similarity_scanner import get_similarity_penalty
 from inputs.social.alpha_reactor.alpha_router import AlphaRouter
 from inputs.social.influencer_scanner import InfluencerSignalTracker
 from inputs.social.sentiment_fusion import SentimentFusion
-
+from cortex.strategy_cortex import apply_strategy_logic
 # === Fusion Modules ===
 from inputs.wallet.wallet_influence import WalletInfluenceTracker
 
@@ -208,18 +208,32 @@ async def evaluate_trade(token_context: dict) -> dict:
     w_social  = float(w.get("social", 0.0))
     w_memory  = float(w.get("memory", 0.0))
     w_flow    = float(w.get("flow", 0.0))
-    w_sum = max(1e-6, w_chart + w_onchain + w_social + w_memory + w_flow)
-
-    # normalize -> each bucket contributes up to 100
+    w_sum = w_chart + w_onchain + w_social + w_memory + w_flow
     blended = (
-        (chart_score_10   * w_chart)   +
-        (onchain_points   * w_onchain) +
-        (social_points    * w_social)  +
-        (memory_points    * w_memory)  +
-        (flow_points      * w_flow)
-    ) * (10.0 / w_sum)  # 10 * (weighted_avg) → 0..100
+        (chart_score_10 * w_chart) +
+        (onchain_points * w_onchain) +
+        (social_points  * w_social) +
+        (memory_points  * w_memory) +
+        (flow_points    * w_flow)
+    ) * (10.0 / w_sum) if w_sum > 0 else 0.0
 
-    score = blended
+    # --- ML prediction blending ---
+    ml_price_pred = token_context.get("ml_price_pred")
+    ml_rug_pred = token_context.get("ml_rug_pred")
+    ml_wallet_pred = token_context.get("ml_wallet_pred")
+    ml_boost = 0.0
+    if ml_price_pred is not None:
+        ml_boost += float(ml_price_pred) * 2.0
+        reasons.append(f"ml_price_pred: {ml_price_pred:.2f} x 2.0 = {float(ml_price_pred)*2.0:.2f}")
+    if ml_rug_pred is not None:
+        ml_boost -= float(ml_rug_pred) * 3.0
+        reasons.append(f"ml_rug_pred: {ml_rug_pred:.2f} x -3.0 = {-float(ml_rug_pred)*3.0:.2f}")
+    if ml_wallet_pred is not None:
+        ml_boost += float(ml_wallet_pred) * 1.5
+        reasons.append(f"ml_wallet_pred: {ml_wallet_pred:.2f} x 1.5 = {float(ml_wallet_pred)*1.5:.2f}")
+
+    score = blended + ml_boost
+    reasons.append(f"ML blended boost: {ml_boost:.2f}")
     reasons.append(f"buckets chart={breakdown['chart']} onchain={breakdown['onchain']} social={breakdown['social']} memory={breakdown['memory']} flow={breakdown['flow']}")
 
     # ---------- Your existing “extras” layered in (but softly) ----------
@@ -455,6 +469,67 @@ async def evaluate_trade(token_context: dict) -> dict:
             "exit": float((profile.get("thresholds") or {}).get("exit", 35)),
         }
 
+    })
+
+
+    # === First-class strategy cortex scoring ===
+    # Build feature frame for strategy cortex
+    features = {
+        "chart": chart,
+        "wallets": wallets,
+        "txn": txn,
+        "memory": context.get("memory", {}),
+        "profile": profile,
+        "breakdown": breakdown,
+        "score": score,
+        "reasons": reasons,
+        "action": action,
+        "micro_strategy": micro_strategy,
+        "ml_price_pred": token_context.get("ml_price_pred"),
+        "ml_rug_pred": token_context.get("ml_rug_pred"),
+        "ml_wallet_pred": token_context.get("ml_wallet_pred"),
+        "bundle": bundle,
+        "trusted": trusted,
+        "early_relief": early_relief,
+        "trusted_relief": trusted_relief,
+        "sizing": sizing,
+        "bands": bands,
+        "effective_buy_min": effective_buy_min,
+    }
+
+    # Call strategy cortex logic for adaptive scoring and overrides
+    strategy_result = apply_strategy_logic(features, context)
+    if strategy_result and isinstance(strategy_result, dict):
+        score = strategy_result.get("final_score", score)
+        reasons = strategy_result.get("reasoning", reasons)
+        action = strategy_result.get("action", action)
+        fallback_triggered = strategy_result.get("fallback_triggered", False)
+        override_trace = strategy_result.get("override_trace", [])
+        strategy_verdict = strategy_result.get("verdict", {})
+    else:
+        fallback_triggered = False
+        override_trace = []
+        strategy_verdict = {}
+
+    # Unified output: always return full verdict with strategy cortex as first-class
+    verdict.update({
+        "final_score": score,
+        "action": action,
+        "reasoning": reasons,
+        "strategy": {
+            **micro_strategy,
+            "sizing": sizing,
+            "strategy_cortex": strategy_verdict,
+            "fallback": fallback_triggered,
+            "overrides": override_trace,
+        },
+        "insights": insights,
+        "verification": verify_evaluation({
+            "action": action,
+            "final_score": score,
+            "reasoning": reasons,
+            "strategy": micro_strategy,
+        }),
     })
 
     return verdict

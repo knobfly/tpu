@@ -10,28 +10,28 @@ from utils.wallet_data import get_tracked_wallets
 
 
 class WalletCortex:
+     def __init__(self, memory):
+        self.memory = memory
+   
     # --- Supervisor Integration Hooks ---
     def receive_chart_signal(self, token_context: dict, chart_insights: dict):
         """
         Receive chart signals broadcast from supervisor or other modules.
         Can be used to update wallet scoring or trigger analytics.
         """
-        # Example: log or adapt wallet scoring based on chart context
-        pass
+        print(f"[WalletCortex] Received chart signal for {token_context.get('token_address')}: {chart_insights}")
 
     def update_persona_context(self, persona_context: dict):
         """
         Receive persona context updates for adaptive wallet logic.
         """
-        # Example: adapt wallet scoring or risk logic based on persona traits/mood
-        pass
+        print(f"[WalletCortex] Persona context updated: {persona_context}")
 
     def receive_analytics_update(self, update: dict):
         """
         Receive analytics/state updates for unified decision-making.
         """
-        # Example: update internal state or trigger wallet analytics
-        pass
+        print(f"[WalletCortex] Analytics update received: {update}")
 
     def contribute_features(self, token_context: dict) -> dict:
         """
@@ -43,8 +43,6 @@ class WalletCortex:
             "avg_reputation": insights.get("avg_reputation", 0.0),
             "whales_present": insights.get("whales_present", False),
         }
-    def __init__(self, memory):
-        self.memory = memory
 
     def analyze_wallets(self, token_data: dict) -> dict:
         token_address = token_data.get("token_address")

@@ -2,9 +2,8 @@
 
 import logging
 from datetime import datetime, timedelta
-
 from utils.logger import log_event
-from utils.rpc_loader import get_active_rpc  # ✅ Use rpc_router
+from utils.rpc_loader import get_active_rpc
 from utils.service_status import update_status
 
 

@@ -96,14 +96,14 @@ def score_token(ctx: Dict[str, Any]) -> Dict[str, Any]:
     """
     Router. Returns a 0..100 'final_score' and an action from the engine.
     Then applies a small chart overlay boost (profile-safe).
+    ML predictions are blended into the score if present in ctx.
     """
     mode: Mode = decide_mode(ctx)
     if not ctx.get("profile"):
         prof_name, _prof = pick_profile_with_bandit(mode, ctx)
         ctx = dict(ctx)
         ctx["profile"] = prof_name
-        # optional audit
-        ctx["_profile_chosen_by"] = "bandit"  # or "rules" if len(cands)==1 in selector
+        ctx["_profile_chosen_by"] = "bandit"
 
     if mode == "snipe":
         res = _run_maybe_async(evaluate_snipe(ctx))
@@ -115,33 +115,40 @@ def score_token(ctx: Dict[str, Any]) -> Dict[str, Any]:
 
     res.setdefault("_scoring_engine", mode)
 
-    try:
-        from memory.token_memory_index import get_pool_params
-        token = ctx.get("token_address") or ctx.get("token")
-        p = get_pool_params(token) if token else {}
-        fee_bps = float(p.get("fee_bps", 0.0))
-        # light touch: trade cares more (multiple legs, longer hold); snipe cares a bit
-        damp = 0.15 if mode == "trade" else 0.08
-        fee_penalty = min(fee_bps / 100.0, 50.0) * damp   # e.g., 30 bps -> 0.3 * damp points on 0..100
-        base = float(res.get("final_score", 0.0))
-        res["final_score"] = max(min(base - fee_penalty, 100.0), 0.0)
-        expl = res.get("explain") if isinstance(res.get("explain"), list) else []
-        expl.append(f"fee_overlay:-{fee_bps:.0f}bps×{damp:.2f}")
-        res["explain"] = expl
-    except Exception:
-        pass
+    # --- ML prediction blending ---
+    ml_price_pred = ctx.get("ml_price_pred")
+    ml_rug_pred = ctx.get("ml_rug_pred")
+    ml_wallet_pred = ctx.get("ml_wallet_pred")
+    ml_boost = 0.0
+    explain_ml = []
+    if ml_price_pred is not None:
+        ml_boost += float(ml_price_pred) * 2.0
+        explain_ml.append(f"ml_price_pred: {ml_price_pred:.2f} x 2.0 = {float(ml_price_pred)*2.0:.2f}")
+    if ml_rug_pred is not None:
+        ml_boost -= float(ml_rug_pred) * 3.0
+        explain_ml.append(f"ml_rug_pred: {ml_rug_pred:.2f} x -3.0 = {-float(ml_rug_pred)*3.0:.2f}")
+    if ml_wallet_pred is not None:
+        ml_boost += float(ml_wallet_pred) * 1.5
+        explain_ml.append(f"ml_wallet_pred: {ml_wallet_pred:.2f} x 1.5 = {float(ml_wallet_pred)*1.5:.2f}")
 
-    # --- Overlays: chart (capped) + micro-forecast (tiny) ---
+    # Apply ML boost to final_score
+    if "final_score" in res:
+        res["final_score"] = _clamp(float(res["final_score"]) + ml_boost, 0.0, 100.0)
+        res["ml_boost"] = ml_boost
+        expl = res.get("explain") if isinstance(res.get("explain"), list) else []
+        expl.extend(explain_ml)
+        expl.append(f"ML blended boost: {ml_boost:.2f}")
+        res["explain"] = expl
+
+    # --- Existing overlays: chart, micro-forecast ---
     try:
         token = ctx.get("token_address") or ctx.get("token")
         mode = decide_mode(ctx)
-        # 1) Chart overlay (normalized 0..1 -> capped points on 0..100 scale)
-        chart01 = _chart_overlay_score_sync(token)  # 0..1
+        chart01 = _chart_overlay_score_sync(token)
         if isinstance(res, dict):
             base = float(res.get("final_score", 0.0))
             overlay_cap = 8.0 if mode == "trade" else 5.0
             boost = chart01 * overlay_cap
-
             res["final_score"] = _clamp(base + boost, 0.0, 100.0)
             res["chart_overlay"] = {
                 "mode": mode,
@@ -149,35 +156,27 @@ def score_token(ctx: Dict[str, Any]) -> Dict[str, Any]:
                 "boost_cap": overlay_cap,
                 "boost_applied": round(boost, 2),
             }
-
-            # audit trail
             expl = res.get("explain") if isinstance(res.get("explain"), list) else []
             expl.append(f"chart_overlay:+{boost:.2f} (norm={chart01:.2f}, cap={overlay_cap:.1f})")
             res["explain"] = expl
-
-        # 2) (Optional) micro forecast overlay (very small weight)
         try:
-            from utils.forecaster import forecast_next  # may not exist; that’s fine
+            from utils.forecaster import forecast_next
             if forecast_next and isinstance(res, dict):
-                # use cached OHLCV if stored; keeps this cheap during live runs
                 mem = get_chart_memory(token) or {}
                 ohlcv = mem.get("ohlcv")
                 if ohlcv is not None:
-                    fc = forecast_next(ohlcv)  # dict with expected_return (fraction), or other form
+                    fc = forecast_next(ohlcv)
                     exp = float(fc.get("expected_return", 0.0)) if isinstance(fc, dict) else 0.0
                     if exp != 0.0:
                         base2 = float(res.get("final_score", 0.0))
-                        fweight = 0.05 if mode == "trade" else 0.08  # tiny nudge
-                        # exp (fraction) -> percent -> tiny points on 0..100
+                        fweight = 0.05 if mode == "trade" else 0.08
                         boosted2 = base2 + (exp * 100.0 * fweight)
                         res["final_score"] = _clamp(boosted2, 0.0, 100.0)
-
                         expl2 = res.get("explain") if isinstance(res.get("explain"), list) else []
-                        expl2.append(f"forecast_overlay:+{exp*100:.2f}%×{fweight:.2f}")
+                        expl2.append(f"forecast_overlay:+{exp*100:.2f}%\u00d7{fweight:.2f}")
                         res["explain"] = expl2
         except Exception as e:
             log_event(f"[ScoreOverlay] forecast blend error: {e}")
-
     except Exception as e:
         log_event(f"[ScoreOverlay] blend error: {e}")
 

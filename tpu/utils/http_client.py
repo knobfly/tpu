@@ -3,7 +3,6 @@ import logging
 import traceback
 from contextlib import asynccontextmanager
 from typing import Any, Iterable, Mapping, Optional
-
 import aiohttp
 
 _DEFAULT_TIMEOUT = aiohttp.ClientTimeout(total=15, connect=5, sock_connect=5, sock_read=15)
@@ -80,8 +79,8 @@ class SafeSession:
         # Also close connector explicitly to free sockets
         try:
             await self._connector.close()
-        except Exception:
-            pass
+        except Exception as e:
+            logging.warning(f"[SafeSession] Failed to close connector: {e}")
 
     async def __aenter__(self) -> aiohttp.ClientSession:
         return await self._ensure()

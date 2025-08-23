@@ -1,9 +1,7 @@
-# modules/utils/llm_client.py
 import asyncio
 import logging
 import os
 from typing import Dict, List, Optional
-
 import aiohttp
 
 DEFAULT_MODEL = os.getenv("NYX_LLM_MODEL", "gpt-4o-mini")  # override in config.json if you want

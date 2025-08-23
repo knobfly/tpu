@@ -3,7 +3,6 @@
 import asyncio
 import logging
 from typing import Any
-
 from inputs.meta_data.token_metadata_fetcher import fetch_sol_volume
 from librarian.data_librarian import librarian
 from utils.logger import log_event

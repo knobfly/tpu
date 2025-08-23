@@ -1,6 +1,5 @@
 import logging
 from typing import Any, Dict
-
 from core.live_config import config as live_config
 from solana.keypair import Keypair
 from solana.rpc.api import Client

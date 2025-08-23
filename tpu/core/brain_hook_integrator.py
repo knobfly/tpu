@@ -1,7 +1,4 @@
-# modules/brain_hook_integrator.py
-
 import logging
-
 from core.llm.llm_interface import (
     gpt_analyze_trend_theme,
     gpt_journal_trade,

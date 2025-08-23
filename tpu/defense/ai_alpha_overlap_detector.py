@@ -60,4 +60,4 @@ async def trigger_overlap_alert(token: str, score: float):
     try:
         await librarian.react_to_overlap(token, score)
     except Exception as e:
-        logging.debug(f"[AlphaOverlap] Librarian reaction failed: {e}")
+        logging.warning(f"[AlphaOverlap] react_to_overlap failed: {e}")

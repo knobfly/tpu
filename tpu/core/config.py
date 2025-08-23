@@ -1,11 +1,7 @@
-# === Config Module ===
-# File: modules/config.py
-
 import json
 import os
-
 from utils.logger import log_event
-from utils.rpc_loader import get_random_rpc  # 🔁 New dynamic RPC rotation
+from utils.rpc_loader import get_random_rpc
 
 CONFIG_PATH = os.path.expanduser("home/ubuntu/nyx/config.json")
 

@@ -16,7 +16,7 @@ from librarian.data_librarian import librarian
 from inputs.social.x_alpha.x_gate import x_api_guard
 from inputs.social.x_alpha.x_trending import TrendingTerms
 from utils.meta_keywords import add_keywords
-
+from utils.telegram_utils import send_telegram_message
 # --- State ---
 X_STATE_DIR = "/home/ubuntu/nyx/runtime/memory/x"
 TRACKED_HANDLES_PATH = os.path.join(X_STATE_DIR, "tracked_handles.json")
@@ -120,7 +120,7 @@ async def fetch_x_mentions(token: str) -> list[str]:
         log_event(f"[XFeed] fetch_x_mentions fetch failed: {e}")
         return mentions
 
-    def send_alert(message: str):
+    def send_telegram_message(message: str):
         """Send a real-time alert (DM, push, etc.). Replace with actual DM logic."""
         log_event(f"[ALERT] {message}")
         # Example: send_self_dm(message) or push notification

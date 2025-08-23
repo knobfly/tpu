@@ -1,6 +1,5 @@
 import logging
 from typing import Any, Dict
-
 from defense.market_mood_tracker import get_current_meta_trend
 from inputs.meta_data.meta_llm_analyzer import analyze_meta_description
 from inputs.meta_data.tag_manager import get_tag_boost_score
@@ -14,25 +13,28 @@ from memory.token_memory_index import update_token_meta_memory
 
 
 class MetaCortex:
+    def __init__(self, memory):
+        self.memory = memory
+
     # --- Supervisor Integration Hooks ---
     def receive_chart_signal(self, token_context: dict, chart_insights: dict):
         """
         Receive chart signals broadcast from supervisor or other modules.
         Can be used to update meta scoring or trigger analytics.
         """
-        pass
+        print(f"[MetaCortex] Received chart signal for {token_context.get('token_address')}: {chart_insights}")
 
     def update_persona_context(self, persona_context: dict):
         """
         Receive persona context updates for adaptive meta logic.
         """
-        pass
+        print(f"[MetaCortex] Persona context updated: {persona_context}")
 
     def receive_analytics_update(self, update: dict):
         """
         Receive analytics/state updates for unified decision-making.
         """
-        pass
+        print(f"[MetaCortex] Analytics update received: {update}")
 
     def contribute_features(self, token_context: dict) -> dict:
         """
@@ -44,8 +46,6 @@ class MetaCortex:
             "cluster_score": insights.get("cluster_score", 0.0),
             "alignment_score": insights.get("alignment_score", 0.0),
         }
-    def __init__(self, memory):
-        self.memory = memory
 
     def analyze_meta(self, token_data: dict) -> dict:
         token_address = token_data.get("token_address")

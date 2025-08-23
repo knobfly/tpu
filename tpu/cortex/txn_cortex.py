@@ -1,23 +1,28 @@
+import time
+
 class TxnCortex:
+    def __init__(self, memory):
+        self.memory = memory
+
     # --- Supervisor Integration Hooks ---
     def receive_chart_signal(self, token_context: dict, chart_insights: dict):
         """
         Receive chart signals broadcast from supervisor or other modules.
         Can be used to update transaction analytics or trigger scoring.
         """
-        pass
+        print(f"[TxnCortex] Received chart signal for {token_context.get('token_address')}: {chart_insights}")
 
     def update_persona_context(self, persona_context: dict):
         """
         Receive persona context updates for adaptive transaction logic.
         """
-        pass
+        print(f"[TxnCortex] Persona context updated: {persona_context}")
 
     def receive_analytics_update(self, update: dict):
         """
         Receive analytics/state updates for unified decision-making.
         """
-        pass
+        print(f"[TxnCortex] Analytics update received: {update}")
 
     def contribute_features(self, token_context: dict) -> dict:
         """
@@ -27,8 +32,6 @@ class TxnCortex:
         # This assumes you have access to recent_txns and required functions
         # For now, returns empty dict (to be implemented with real context)
         return {}
-    def __init__(self, memory):
-        self.memory = memory
 
     def analyze_transactions(
         self,
@@ -98,9 +101,9 @@ class TxnCortex:
         txn_score = 0
         if lp_event:
             txn_score += 10
-        txn_score += sniper_pressure
-        txn_score += pump_score
-        txn_score += influence_score
+            txn_score += sniper_pressure
+            txn_score += pump_score
+            txn_score += influence_score
         if rug_flagged:
             txn_score -= 8
 

@@ -38,6 +38,7 @@ from utils.logger import log_event
 from utils.time_utils import get_token_age_minutes
 from utils.token_utils import get_lp_lock_status, get_token_fees, is_blacklisted_token
 from utils.wallet_helpers import count_unique_buyers, get_wallet_signal_bonus
+from cortex.strategy_cortex import apply_strategy_logic
 
 wallet_influence = WalletInfluenceTracker()
 influencer_tracker = InfluencerSignalTracker()
@@ -212,7 +213,23 @@ async def evaluate_snipe(token_context: dict) -> dict:
         (chart_pts * w_chr)
     ) * (10.0 / w_sum)  # 10 * weighted_avg -> 0..100
 
-    score = blended
+    # --- ML prediction blending ---
+    ml_price_pred = token_context.get("ml_price_pred")
+    ml_rug_pred = token_context.get("ml_rug_pred")
+    ml_wallet_pred = token_context.get("ml_wallet_pred")
+    ml_boost = 0.0
+    if ml_price_pred is not None:
+        ml_boost += float(ml_price_pred) * 2.0
+        reasons.append(f"ml_price_pred: {ml_price_pred:.2f} x 2.0 = {float(ml_price_pred)*2.0:.2f}")
+    if ml_rug_pred is not None:
+        ml_boost -= float(ml_rug_pred) * 3.0
+        reasons.append(f"ml_rug_pred: {ml_rug_pred:.2f} x -3.0 = {-float(ml_rug_pred)*3.0:.2f}")
+    if ml_wallet_pred is not None:
+        ml_boost += float(ml_wallet_pred) * 1.5
+        reasons.append(f"ml_wallet_pred: {ml_wallet_pred:.2f} x 1.5 = {float(ml_wallet_pred)*1.5:.2f}")
+
+    score = blended + ml_boost
+    reasons.append(f"ML blended boost: {ml_boost:.2f}")
     reasons.append(f"buckets t0={breakdown['t0_flow']} wallet={breakdown['wallet']} liq={breakdown['liquidity']} social={breakdown['social']} chart={breakdown['chart']}")
 
     # ---------------- Your existing extras (soft caps) ----------------
@@ -475,7 +492,21 @@ async def evaluate_snipe(token_context: dict) -> dict:
             "probe_effective": effective_buy_min,
         }
     })
+
+
+    # === Final adaptive score with overrides ===
+    strategy_result = apply_strategy_logic(features, context)
+
+    verdict.update({
+        "score": strategy_result["final_score"],
+        "reasoning": strategy_result["reasoning"],
+        "fallback": strategy_result["fallback_triggered"],
+        "overrides": strategy_result["override_trace"],
+        "context": context,
+    })
+
     return verdict
+
 
 def adjust_score(token: str, base_score: float) -> float:
     reflex = adaptive_controller().get_reflex_for_token(token)

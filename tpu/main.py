@@ -7,11 +7,14 @@ import inspect
 from collections import defaultdict
 from datetime import datetime
 
+from openai import api_key
+
 from chart.bitquery_insight import run_bitquery_insight
 from chart.bitquery_leaderboard_loop import run_bitquery_leaderboard_loop
 from chart.chart_pattern_detector import run_chart_pattern_detector
 from chart.volume_divergence_detector import VolumeDivergenceDetector
 from chart.volume_spike_detector import VolumeSpikeDetector
+from inputs.onchain.token_discovery_engine import TokenDiscoveryEngine
 
 # === Core AI + Telegram ===
 from core.ai_brain import ai_brain as shared_ai_brain
@@ -34,6 +37,8 @@ from exec.feeding_frenzy import FeedingFrenzy
 from exec.real_time_wallet_trigger import run_real_time_wallet_trigger
 from exec.trade_executor import TradeExecutor
 from exec.raydium_orca_tracker import RaydiumOrcaTracker
+from inputs.social.x_alpha.x_autofollow import start_autofollow_loop
+
 # === Agents ===
 from inputs.agents import causal_agent, graph_agent, meta_strategy_agent, style_agent
 from inputs.agents.alpha_agent import start_alpha_agent
@@ -52,6 +57,7 @@ from inputs.social.x_alpha.x_feed_scanner import run_scan_x_feed
 from inputs.social.x_alpha.x_orchestrator import run_x_orchestrator
 from inputs.trending.trending_fanin import run_trending_fanin
 from inputs.wallet.cabal_watcher import run_cabal_watcher
+from inputs.onchain.wallet_watch_trigger import WalletWatchTrigger
 
 # === Wallet + Events ===
 from inputs.wallet.multi_wallet_manager import multi_wallet
@@ -191,7 +197,8 @@ async def main():
     trade_executor = TradeExecutor()
     AutoSellLogic(wallet)
     frenzy = FeedingFrenzy(wallet, engine, shared_ai_brain)
-
+    discovery = TokenDiscoveryEngine(api_key or config.get("solscan_api_key"))
+    wallet_trigger = WalletWatchTrigger()
     shared_ai_brain.attach_engine(engine)
     shared_ai_brain.attach_wallet(wallet)
     librarian.register("ai_brain", shared_ai_brain)
@@ -354,9 +361,22 @@ async def DailyLearningLoop():
             logging.warning(f"[DailyLearningLoop] Error: {e}")
         await asyncio.sleep(24 * 3600)
 
+async def run_token_discovery_loop():
+    while True:
+        await discovery.run_discovery_cycle()
+        await asyncio.sleep(300)  # every 5 minutes or as needed
+
+async def run_wallet_watch_loop():
+    await wallet_trigger.run()
+    
 if __name__ == "__main__":
     try:
         asyncio.run(main())
+        asyncio.run(run_token_discovery_loop())
+        asyncio.run(DailyLearningLoop())
+        asyncio.run(run_wallet_watch_loop())
+        asyncio.run(start_autofollow_loop())
+        
     except KeyboardInterrupt:
         log_event("🛑 Bot manually stopped.")
         librarian.persist_all()

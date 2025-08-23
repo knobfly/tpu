@@ -3,31 +3,34 @@
 import asyncio
 import logging
 from typing import Any, Dict, List, Optional
-
 import pandas as pd
-from chart.bitquery_analytics import get_bitquery_token  # external boost
-
-# REUSE your existing helpers (no duplicates):
-from chart.chart_data_loader import get_chart_data  # fetch OHLCV
-from chart.chart_pattern_detector import detect_chart_patterns  # patterns
-from chart.heatmap_optimizer import get_heatmap_boost  # heatmap boost
-from chart.pump_pattern_classifier import detect_pump_signals  # pump detector
-from memory.token_memory_index import update_chart_memory  # writeback
+from chart.bitquery_analytics import get_bitquery_token
+from chart.chart_data_loader import get_chart_data
+from chart.chart_pattern_detector import detect_chart_patterns
+from chart.heatmap_optimizer import get_heatmap_boost
+from chart.pump_pattern_classifier import detect_pump_signals
+from memory.token_memory_index import update_chart_memory
 from utils.forecaster import forecast_next
 from utils.logger import log_event
-from utils.tech_indicators import (  # TA; scoring utils
-    bbands,
-    ema,
-    get_momentum_score,
-    get_trend_score,
-    macd,
-    rsi,
-    sma,
-)
-from utils.volume_utils import detect_volume_spike  # volume
+from utils.tech_indicators import bbands, ema, get_momentum_score, get_trend_score, macd, rsi, sma
+from utils.volume_utils import detect_volume_spike
 
 
 class ChartCortex:
+      """
+    Centralized chart analysis:
+      - Pulls recent OHLCV
+      - Builds indicators (RSI/MACD/EMAs/Bands)
+      - Detects patterns / volume spikes / pump signatures
+      - Blends into a chart_score and writes back memory
+    Public API:
+      - analyze_token_async({ token_address, interval?, lookback_bars?, mode? })
+      - score_token(token_address, interval='1m', lookback_bars=200)
+    """
+
+    def __init__(self, memory: Optional[object] = None):
+        self.memory = memory
+    
     # --- Supervisor Integration Hooks ---
     def receive_chart_signal(self, token_context: Dict[str, Any], chart_insights: Dict[str, Any]):
         """
@@ -71,20 +74,7 @@ class ChartCortex:
             "trend": insights.get("trend", "unknown"),
             "volatility": insights.get("volatility", "unknown"),
         }
-    """
-    Centralized chart analysis:
-      - Pulls recent OHLCV
-      - Builds indicators (RSI/MACD/EMAs/Bands)
-      - Detects patterns / volume spikes / pump signatures
-      - Blends into a chart_score and writes back memory
-    Public API:
-      - analyze_token_async({ token_address, interval?, lookback_bars?, mode? })
-      - score_token(token_address, interval='1m', lookback_bars=200)
-    """
-
-    def __init__(self, memory: Optional[object] = None):
-        self.memory = memory
-
+  
     # ---------- public (sync wrapper) ----------
     def analyze_token(self, token_context: Dict[str, Any]) -> Dict[str, Any]:
         try:
@@ -304,7 +294,8 @@ class ChartCortex:
                 lower, mid, upper = bbands(df["close"], 20, 2.0)
                 df["bb_lower"], df["bb_mid"], df["bb_upper"] = lower, mid, upper
             except Exception:
-                pass
+                import numpy as np
+                df["bb_lower"], df["bb_mid"], df["bb_upper"] = np.nan, np.nan, np.nan
             return df
         except Exception as e:
             logging.debug(f"[ChartCortex] feature build failed: {e}")

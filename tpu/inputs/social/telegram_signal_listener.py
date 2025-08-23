@@ -19,6 +19,10 @@ from utils.universal_input_validator import safe_parse
 
 # Regex: rough Base58 (32–44 chars) for Solana addresses
 SOL_ADDRESS_RE = re.compile(r"\b[1-9A-HJ-NP-Za-km-z]{32,44}\b")
+# Ethereum address: 0x followed by 40 hex chars
+ETH_ADDRESS_RE = re.compile(r"0x[a-fA-F0-9]{40}")
+# BSC address: same format as Ethereum
+BSC_ADDRESS_RE = ETH_ADDRESS_RE
 # Simple $TICKER detection
 TICKER_RE = re.compile(r"\$[A-Za-z0-9]{2,12}")
 
@@ -39,10 +43,14 @@ def _too_soon(chat_id: int) -> bool:
 
 
 def extract_signal_candidates(text: str) -> dict:
-    addresses = SOL_ADDRESS_RE.findall(text) or []
+    sol_addresses = SOL_ADDRESS_RE.findall(text) or []
+    eth_addresses = ETH_ADDRESS_RE.findall(text) or []
+    bsc_addresses = BSC_ADDRESS_RE.findall(text) or []
+    # Deduplicate all addresses
+    all_addresses = set(sol_addresses + eth_addresses + bsc_addresses)
     tickers = TICKER_RE.findall(text) or []
     tickers = [t[1:] for t in tickers]  # strip $
-    return {"addresses": list(set(addresses)), "tickers": list(set(tickers))}
+    return {"addresses": list(all_addresses), "tickers": list(set(tickers))}
 
 
 async def _handle_telegram_signal(text: str, chat_id: int, user_handle: str):

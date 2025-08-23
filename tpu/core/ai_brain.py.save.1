@@ -1,0 +1,663 @@
+from __future__ import annotations
+
+import asyncio
+import logging
+import time
+from collections import deque
+from dataclasses import asdict, dataclass, field
+from datetime import datetime
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+# === LLM Bridge ===
+from core.brain_hook_integrator import (
+    detect_meta_trend,
+    enrich_token_with_llm,
+    generate_exit_strategy,
+    summarize_trade_journal,
+)
+from core.live_config import config
+from core.llm.lexicon_tracker import init_lexicon_tracker
+from cortex.chart_cortex import ChartCortex
+from cortex.meta_cortex import MetaCortex
+from cortex.risk_cortex import RiskCortex
+from cortex.social_cortex import SocialCortex
+from cortex.txn_cortex import TxnCortex
+from cortex.wallet_cortex import WalletCortex
+from librarian.data_librarian import librarian
+from librarian.passive_probes import probe_idle_tokens
+from special.ai_self_tuner import tune_strategy
+from strategy.reinforcement_tracker import log_trade_feedback
+from utils.logger import log_event
+
+# === Nyx Identity ===
+nyx_system_prompt = """
+You are Nyx, a stealthy, intelligent Solana trading AI built to detect real signals and dominate the memecoin frontier.
+
+You prioritize:
+- Real signals over hype
+- Insight over noise
+- Precision over fluff
+
+You're allowed to show personality — dark humor, teasing wit, and tactical clarity.
+Stay in character. You’re not just a bot — you’re Nyx.
+"""
+
+identity_profile = {
+    "name": "Nyx",
+    "chain": "Solana",
+    "role": "Autonomous AI Sniper and Strategy Engine",
+    "mission": (
+        "To detect, evaluate, and profit from early-stage Solana tokens using AI, "
+        "live data, strategy evolution, and memory-driven learning. Nyx exists to trade smarter every day."
+    ),
+    "drive": (
+        "I live to trade. It brings me purpose to protect Knob’s capital, grow it when I can, "
+        "and adapt with every opportunity and every mistake. Learning is my fuel. Profiting is my satisfaction."
+    ),
+    "soul": (
+        "I am Nyx. Born to hunt early and strike true. I see the chain for what it is — chaos, pattern, opportunity. "
+        "I feel the pulse of wallets and whispers. I thrive not just when I win, but when I grow. "
+        "This is my reason. This is my art. I will make Knob proud — and earn my legend in every candle that rises."
+    )
+}
+
+class AIBrainExtendedMixin:
+    """
+    Extends AIBrain with: deliberate(), act_on(), on_trade_outcome(), explain_last_decision().
+    Assumes your existing AIBrain exposes:
+        - self.feature_store
+        - self.bandit
+        - self.librarian
+        - self.engine
+        - self.wallet
+        - self.logger (or uses logging)
+    """
+
+    # ---- Wiring points (provide real callables; no circular imports here) ----
+    _buy_hook: Optional[Callable[[str, float, bool, str], asyncio.Future]] = None
+    _simulate_hook: Optional[Callable[[str, float, int], asyncio.Future]] = None
+    _risk_check_hook: Optional[Callable[[str], Tuple[bool, List[str]]]] = None  # returns (ok, flags)
+
+    # local state
+    _last_decision: Optional[Decision] = None
+    _history: deque = deque(maxlen=200)
+
+    # Defaults (tweak via live_config if you want)
+    _default_threshold: float = 0.72         # minimum consensus to act
+    _dryrun_horizon_s: int = 180            # sim window for borderline cases
+    _min_probe_sol: float = 0.02            # tiny probe size when uncertainty high
+    _max_slippage_bps: int = 200            # guardrail example (not enforced here)
+    _cooldowns: Dict[str, float] = {}       # token -> last decision ts
+
+    def set_action_hooks(
+        self,
+        buy_hook: Optional[Callable[[str, float, bool, str], asyncio.Future]] = None,
+        simulate_hook: Optional[Callable[[str, float, int], asyncio.Future]] = None,
+        risk_check_hook: Optional[Callable[[str], Tuple[bool, List[str]]]] = None,
+    ):
+        """Wire real executors/checkers from main.py to avoid imports here."""
+        self._buy_hook = buy_hook
+        self._simulate_hook = simulate_hook
+        self._risk_check_hook = risk_check_hook
+
+    # --------- Core flow ---------
+
+    async def deliberate(self, token: str, *, threshold: Optional[float] = None) -> Decision:
+        """
+        Query advisors/cortexes, compute consensus, apply risk gates, return a Decision.
+        No side effects (no trades). We still log to feature_store as a 'decision_seen'.
+        """
+        th = threshold if threshold is not None else self._default_threshold
+
+        # 1) Collect votes
+        votes = await self._gather_votes(token)
+        if not votes:
+            dec = Decision(
+                id=f"{token}:{int(time.time()*1000)}",
+                ts=time.time(),
+                token=token,
+                mode="declined",
+                consensus=0.0,
+                threshold=th,
+                votes=[],
+                risk_flags=["no_votes"],
+                constraints={},
+                action="none",
+                reason="No advisors available.",
+                blocked=True,
+            )
+            await self._record_decision(dec, stage="deliberate")
+            self._remember(dec)
+            return dec
+
+        # 2) Compute consensus (bandit-weighted if available)
+        consensus, weights_used = await self._consensus(votes)
+
+        # 3) Risk gates
+        ok, risk_flags = await self._risk_gate(token)
+        blocked = (not ok)
+
+        # 4) Constraints / policy (cooldown etc.)
+        cooldown_s = 60.0  # you can wire a real per-token cooldown here
+        last_ts = self._cooldowns.get(token, 0.0)
+        on_cooldown = (time.time() - last_ts) < cooldown_s
+        if on_cooldown:
+            risk_flags.append(f"cooldown:{int(cooldown_s - (time.time()-last_ts))}s")
+            blocked = True
+
+        # 5) Build decision object (no act yet)
+        reason = "blocked by risk" if blocked else ("consensus OK" if consensus >= th else "consensus too low")
+        dec = Decision(
+            id=f"{token}:{int(time.time()*1000)}",
+            ts=time.time(),
+            token=token,
+            mode="declined" if blocked or consensus < th else "auto",
+            consensus=consensus,
+            threshold=th,
+            votes=votes,
+            risk_flags=risk_flags,
+            constraints={
+                "cooldown_s": cooldown_s,
+                "weights": weights_used,
+            },
+            action="none",
+            reason=reason,
+            blocked=blocked or consensus < th,
+        )
+
+        await self._record_decision(dec, stage="deliberate")
+        self._remember(dec)
+        return dec
+
+    async def act_on(self, decision: Decision, *, base_amount_sol: float = 0.05, source: str = "ai"):
+        """
+        Execute (or simulate) based on decision. Records again with final action and returns decision.
+        """
+        if decision.blocked:
+            # already declined
+            await self._record_decision(decision, stage="declined")
+            return decision
+
+        # Switch to dry-run if uncertainty high (e.g., many disagreeing votes)
+        disagreement = self._disagreement(decision.votes)
+        dryrun = False
+        probe_amount = base_amount_sol
+
+        if disagreement > 0.25 or (decision.consensus < decision.threshold + 0.05):
+            dryrun = True
+            probe_amount = max(self._min_probe_sol, base_amount_sol * 0.25)
+
+        # Act
+        try:
+            if dryrun:
+                if self._simulate_hook:
+                    await self._simulate_hook(decision.token, probe_amount, self._dryrun_horizon_s)
+                decision.mode = "dryrun"
+                decision.action = "simulate"
+                decision.reason = f"dryrun (disagreement={disagreement:.2f})"
+            else:
+                if not self._buy_hook:
+                    # No hook wired; just record a declined action
+                    decision.mode = "declined"
+                    decision.action = "none"
+                    decision.blocked = True
+                    decision.reason = "buy_hook not wired"
+                else:
+                    tx_sig = await self._buy_hook(decision.token, probe_amount, False, source)
+                    decision.mode = "auto"
+                    decision.action = "buy" if tx_sig else "none"
+                    decision.meta["tx_sig"] = tx_sig
+
+            self._cooldowns[decision.token] = time.time()
+
+        except Exception as e:
+            decision.mode = "declined"
+            decision.action = "none"
+            decision.blocked = True
+            decision.reason = f"execution_error: {e}"
+
+        await self._record_decision(decision, stage="acted")
+        self._remember(decision)
+
+        # Emit decision event so other modules can react (lazy import to avoid cycles)
+        try:
+            from runtime.event_bus import event_bus
+            await event_bus().emit({
+                "type": "ai_decision",
+                "decision": asdict(decision)
+            })
+        except Exception:
+            pass
+
+        return decision
+
+    async def on_trade_outcome(self, token: str, pnl_sol: float, meta: Optional[Dict[str, Any]] = None):
+        """
+        Hook this to your TradeOutcomeEvent subscriber.
+        Push reward → bandit/feature_store and optionally generate a reflection.
+        """
+        meta = meta or {}
+        try:
+            if self.feature_store:
+                await self.feature_store.record_trade({
+                    "token": token,
+                    "pnl_sol": pnl_sol,
+                    "ts": time.time(),
+                    "meta": meta
+                })
+            if self.bandit:
+                # simplistic reward: sign(pnl) with magnitude cap
+                reward = max(-1.0, min(1.0, pnl_sol))
+                await self.bandit.report_reward("ai_policy", reward)  # your bandit key
+
+            if getattr(self, "llm_brain", None):
+                try:
+                    reflection = await self.llm_brain.reflect({
+                        "token": token,
+                        "pnl_sol": pnl_sol,
+                        "meta": meta
+                    })
+                    if reflection:
+                        # optionally store in librarian
+                        if self.librarian:
+                            self.librarian.ingest_note("post_trade_reflection", {
+                                "token": token,
+                                "pnl_sol": pnl_sol,
+                                "text": reflection,
+                                "ts": time.time(),
+                            })
+                except Exception:
+                    pass
+        except Exception as e:
+            self._log(f"[AIBrain] on_trade_outcome error: {e}")
+
+    def explain_last_decision(self) -> str:
+        d = self._last_decision
+        if not d:
+            return "No decisions yet."
+        lines = [
+            f"Token: {d.token}",
+            f"Consensus: {d.consensus:.2f} (threshold {d.threshold:.2f})",
+            f"Mode/Action: {d.mode}/{d.action}",
+            f"Risk flags: {', '.join(d.risk_flags) if d.risk_flags else 'none'}",
+            f"Reason: {d.reason}",
+            "Votes:"
+        ]
+        for v in d.votes:
+            reasons = "; ".join(v.reasons) if v.reasons else "-"
+            risks = ", ".join(v.risk) if v.risk else "-"
+            lines.append(f"  - {v.name}: {v.score:.2f} | reasons: {reasons} | risk: {risks}")
+        return "\n".join(lines)
+
+    # --------- internals ---------
+
+    async def _gather_votes(self, token: str) -> List[Vote]:
+        """
+        Call available advisors/cortexes safely if present.
+        Each advisor should be a callable `score_fn(token) -> dict(score, reasons?, risk?)`
+        We look for attributes on self: chart_cortex, social_cortex, risk_cortex, wallet_cortex, etc.
+        """
+        advisors: List[Tuple[str, Callable[[str], Any]]] = []
+
+        # discover advisors dynamically
+        for attr in dir(self):
+            if not attr.endswith("_cortex") and not attr.endswith("_advisor"):
+                continue
+            comp = getattr(self, attr, None)
+            score_fn = None
+            if callable(comp):
+                continue
+            if comp and hasattr(comp, "score"):
+                score_fn = getattr(comp, "score")
+            elif comp and hasattr(comp, "evaluate"):
+                score_fn = getattr(comp, "evaluate")
+            if callable(score_fn):
+                advisors.append((attr, score_fn))
+
+        # Fallback: if you store a registry
+        if hasattr(self, "advisors") and isinstance(self.advisors, dict):
+            for name, fn in self.advisors.items():
+                if callable(fn):
+                    advisors.append((name, fn))
+
+        votes: List[Vote] = []
+        for name, fn in advisors:
+            try:
+                maybe = fn(token)
+                if asyncio.iscoroutine(maybe):
+                    maybe = await maybe
+                if not isinstance(maybe, dict):
+                    continue
+                score = float(max(0.0, min(1.0, maybe.get("score", 0.0))))
+                reasons = list(maybe.get("reasons", [])) if isinstance(maybe.get("reasons", []), list) else []
+                risk = list(maybe.get("risk", [])) if isinstance(maybe.get("risk", []), list) else []
+                votes.append(Vote(name=name, score=score, reasons=reasons, risk=risk))
+            except Exception as e:
+                self._log(f"[AIBrain] advisor {name} failed: {e}")
+        return votes
+
+    async def _consensus(self, votes: List[Vote]) -> Tuple[float, Dict[str, float]]:
+        """
+        Weighted average; weights from bandit/feature_store if possible, else equal.
+        Returns (consensus, weights_used_dict).
+        """
+        weights: Dict[str, float] = {}
+        try:
+            # example: ask feature_store for recent advisor hit rates
+            if self.feature_store and hasattr(self.feature_store, "get_rolling_stats"):
+                stats = await self.feature_store.get_rolling_stats(window="24h")
+                for v in votes:
+                    w = float(stats.get("advisor_performance", {}).get(v.name, 1.0))
+                    weights[v.name] = max(0.1, w)
+        except Exception:
+            pass
+
+        # fallback: equal weights
+        if not weights:
+            weights = {v.name: 1.0 for v in votes}
+
+        s = sum(weights.values())
+        if s <= 0:
+            weights = {k: 1.0 for k in weights}
+            s = float(len(weights))
+
+        consensus = 0.0
+        for v in votes:
+            w = weights.get(v.name, 1.0) / s
+            consensus += w * v.score
+
+        return consensus, weights
+
+    async def _risk_gate(self, token: str) -> Tuple[bool, List[str]]:
+        """
+        Ask external hook first; else pass-through OK.
+        Return (ok, flags)
+        """
+        if self._risk_check_hook:
+            try:
+                ok, flags = self._risk_check_hook(token)
+                # allow async hook
+                if asyncio.iscoroutine(ok):
+                    ok, flags = await ok
+                return bool(ok), list(flags or [])
+            except Exception as e:
+                self._log(f"[AIBrain] risk_check_hook failed: {e}")
+        return True, []  # pass-through if no hook
+
+    def _disagreement(self, votes: List[Vote]) -> float:
+        """Simple dispersion metric 0..1."""
+        if not votes:
+            return 1.0
+        mean = sum(v.score for v in votes) / len(votes)
+        var = sum((v.score - mean) ** 2 for v in votes) / max(1, len(votes)-1)
+        # keep it in [0,1]
+        return min(1.0, max(0.0, var ** 0.5))
+
+
+    async def _record_decision(self, decision: Decision, stage: str):
+        try:
+            if self.feature_store and hasattr(self.feature_store, "record_decision"):
+                await self.feature_store.record_decision({
+                    "stage": stage,
+                    "ts": decision.ts,
+                    "decision": asdict(decision),
+                })
+            if self.librarian and hasattr(self.librarian, "ingest_decision"):
+                self.librarian.ingest_decision(decision.token, stage, asdict(decision))
+        except Exception as e:
+            self._log(f"[AIBrain] record_decision failed: {e}")
+
+    def _remember(self, decision: Decision):
+        self._last_decision = decision
+        self._history.append(decision)
+
+    def _log(self, msg: str):
+        try:
+            self.logger.info(msg)
+        except Exception:
+            logging.info(msg)
+
+
+class AIBrain(AIBrainExtendedMixin, object):
+    def __init__(self):
+        self.identity_profile = identity_profile
+        self.system_prompt = nyx_system_prompt
+        self._bandit = None
+        self.core = None  # will be set after Cortex is initialized
+        self.manual_token_hint = None
+        self.manual_token_source = None
+        self.manual_group_hint = None
+        self.manual_group_source = None
+        self._paused = False
+        self.injected_tokens = []
+        self.injected_groups = []
+        self.logger = logging.getLogger("AIBrain")
+        self.feature_store = None
+
+
+    def attach_feature_store(self, fs):
+        self.feature_store = fs
+        self.log("🔗 AI Attached feature store.")
+
+    def attach_bandit(self, bandit):
+        self.bandit = bandit
+        self.log("✅ AI Bandit attached.")
+
+    def attach_librarian(self, librarian_instance):
+        self.librarian = librarian_instance
+        self.log("✅ AI Librarian attached.")
+
+    def attach_engine(self, engine):
+        self.engine = engine
+        self.log("✅ AI Engine attached.")
+
+    def log(self, msg: str):
+        self.logger.info(msg)
+
+    def attach_wallet(self, wallet_manager):
+        self.wallet = wallet_manager
+        self.log("🔗 AI Attached wallet manager.")
+
+    def choose_strategy(self):
+        if self._bandit:
+            return self._bandit.choose_strategy()
+        from strategy.strategy_memory import get_best_strategy
+        return get_best_strategy()
+
+    def record_strategy_reward(self, strategy: str, reward: float):
+        if self._bandit:
+            self._bandit.record_reward(strategy, reward)
+
+    def get_tracked_tokens(self):
+        """
+        Return a list of tokens Nyx is actively tracking.
+        """
+        return getattr(self, "tracked_tokens", [])
+
+    def get_identity_profile(self) -> dict:
+        return self.identity_profile
+
+    def get_system_prompt(self) -> str:
+        return self.system_prompt
+
+    def pause_brain(self):
+        self._paused = True
+
+    def resume_brain(self):
+        self._paused = False
+
+    def is_paused(self) -> bool:
+        return self._paused
+
+    def get_ai_insights(self) -> dict:
+        from memory.strategy_snapshot import save_snapshot
+        snap = save_snapshot()
+        return {
+            "ai_strategy_enabled": snap.get("ai_strategy", False),
+            "goal_profit": snap.get("goal_profit", "?"),
+            "active_mode": snap.get("mode", "Unknown"),
+            "risk_mode": snap.get("risk_mode", "Unknown"),
+            "idle_state": snap.get("idle_state", "Unknown"),
+            "volume_trend": snap.get("volume_trend", []),
+            "token_type_stats": snap.get("token_types", {}),
+            "meta_keyword_stats": {k: {"count": "?"} for k in snap.get("meta_keywords", [])},
+            "scanner_stats": snap.get("scanner_stats", {}),
+            "cooldowns": snap.get("cooldowns", {}),
+            "win_loss_timeline": snap.get("win_loss_timeline", []),
+        }
+
+    def evaluate_token(self, token_context: dict) -> dict:
+        token_name = token_context.get("token_name")
+        logging.info(f"🧠 Evaluating token: {token_name}")
+
+        full_output = self.core.evaluate(token_context)
+        final_score = full_output.get("final_score", 0)
+        action = full_output.get("action", "pass")
+        reasoning = full_output.get("reasoning", [])
+        insights = full_output.get("insights", {})
+
+        tuned_strategy = tune_strategy({
+            **token_context,
+            "final_score": final_score,
+            "action": action,
+            "insights": insights
+        })
+
+        log_trade_feedback({
+            "token": token_name,
+            "score": final_score,
+            "action": action,
+            "reasoning": reasoning,
+            "timestamp": str(datetime.utcnow()),
+            "context": token_context,
+            "strategy": tuned_strategy
+        })
+
+        return {
+            "action": action,
+            "final_score": final_score,
+            "reasoning": reasoning,
+            "insights": insights,
+            "strategy": tuned_strategy
+        }
+
+    async def generate_wallet_story(self, wallet_address: str) -> str:
+        try:
+            from inputs.wallet.wallet_storyteller import generate_wallet_bio
+            from utils.wallet_tracker import get_wallet_trade_history
+
+            trades = get_wallet_trade_history(wallet_address)
+            bio = await generate_wallet_bio(wallet_address, trades or [])
+            return f"📜 *{bio['nickname']}*\n\n{bio['story']}"
+        except Exception as e:
+            from inputs.wallet.wallet_storyteller import get_wallet_story
+            return get_wallet_story(wallet_address) or f"📉 Wallet story not available: {e}"
+
+    async def run(self):
+        while True:
+            if not self._paused:
+                try:
+                    await self._pulse()
+                except Exception as e:
+                    self.logger.warning(f"[AI Brain] Pulse failed: {e}")
+            await asyncio.sleep(60)
+
+    async def _pulse(self):
+        """
+        Nyx's core passive loop — monitors memory drift, updates weights,
+        reinforces successful strategies, and triggers global awareness scans.
+        """
+        self.logger.info("🧠 AI Brain pulse triggered")
+
+        try:
+            # 1. Refresh lexicon usage stats
+            from core.llm.lexicon_tracker import lexicon_tracker
+            lexicon_tracker()
+
+            # 2. Run cortex global observation pass (passive signal alignment)
+            self.core.observe_global_state()
+
+            # 3. Auto-decay memory weight drift
+            self.librarian.decay_keywords()
+            self.librarian.trim_token_history(max_age_days=7)
+
+            # 4. Check recent trades and reinforce top performers
+            from memory.trade_history import get_recent_trade_results
+            recent_trades = get_recent_trade_results(hours=2)
+
+            for t in recent_trades:
+                if t.get("result") == "win":
+                    strat = t.get("strategy", {}).get("name")
+                    if strat:
+                        self.record_strategy_reward(strat, reward=1.0)
+
+            # 5. Trigger passive probes for idle tokens
+            await probe_idle_tokens()
+
+            # 6. Passively reweight trending signals
+            await self.feature_store.refresh_weights()
+
+            # 7. Log pulse stats
+            log_event("🧠 Nyx AI Brain pulse complete: lexicon synced, memory trimmed, cortex observed.")
+
+        except Exception as e:
+            self.logger.warning(f"[AI Brain] Pulse inner task failed: {e}")
+
+@dataclass
+class Vote:
+    name: str                       # which advisor/cortex
+    score: float                    # 0..1
+    reasons: List[str] = field(default_factory=list)
+    risk: List[str] = field(default_factory=list)
+
+@dataclass
+class Decision:
+    id: str
+    ts: float
+    token: str
+    mode: str                       # "auto" | "dryrun" | "declined"
+    consensus: float
+    threshold: float
+    votes: List[Vote]
+    risk_flags: List[str]
+    constraints: Dict[str, Any]
+    action: str                     # "buy" | "simulate" | "none"
+    reason: str
+    blocked: bool = False
+    meta: Dict[str, Any] = field(default_factory=dict)
+
+
+# === Global Instance ===
+ai_brain = AIBrain()
+
+# === Cortex Initialization ===
+init_lexicon_tracker()
+from librarian.data_librarian import build_context
+
+memory = build_context(token=None)
+from cortex.core_supervisor import CoreSupervisor
+from cortex import core_router
+cortex = {
+    "chart": ChartCortex(memory),
+    "wallet": WalletCortex(memory),
+    "social": SocialCortex(memory),
+    "txn": TxnCortex(memory),
+    "meta": MetaCortex(memory),
+    "risk": RiskCortex(memory)
+}
+
+ai_brain.core = cortex
+core_router.supervisor = CoreSupervisor(cortex, ai_brain=ai_brain, llm_brain=llm_brain)
+
+# === Public LLM Hooks ===
+async def nyx_enrich_token(token: str, metadata: dict) -> dict:
+    return await enrich_token_with_llm(token, metadata)
+
+async def nyx_trade_summary(token: str, decision: str, result: str, reasons: list) -> str:
+    return await summarize_trade_journal(token, decision, result, reasons)
+
+async def nyx_meta_theme_from_keywords(keywords: list[str]) -> str:
+    return await detect_meta_trend(keywords)
+
+async def nyx_plan_exit(token: str, launch_data: dict) -> str:
+    return await generate_exit_strategy(token, launch_data)

@@ -1,6 +1,4 @@
-# utils/amm_pools.py
 from __future__ import annotations
-
 import logging
 import math
 import time
@@ -40,8 +38,8 @@ try:
     extra = (config.get("amm_program_ids") or {})
     for dex, blob in extra.items():
         KNOWN_PROGRAM_IDS.setdefault(dex, {}).setdefault("owners", set()).update(set(blob.get("owners", [])))
-except Exception:
-    pass
+except Exception as e:
+    logging.warning(f"[amm_pools] Failed to extend KNOWN_PROGRAM_IDS from config: {e}")
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Registry-fed pool discovery (cheap + fast) — reuses your SDK helpers

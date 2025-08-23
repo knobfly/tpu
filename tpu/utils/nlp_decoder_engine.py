@@ -40,8 +40,8 @@ async def decode_text_signal(raw_text: str) -> Dict[str, Any]:
     # update keywords (tolerate async/sync just in case)
     try:
         _ = await maybe_call(update_meta_keywords, meta)
-    except Exception:
-        pass
+    except Exception as e:
+        logging.warning(f"[nlp_decoder_engine] update_meta_keywords failed: {e}")
 
     tokens = _MINT_RE.findall(cleaned)
     tickers = _TICKER_RE.findall(cleaned)

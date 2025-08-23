@@ -1,5 +1,4 @@
 import re
-
 from langdetect import DetectorFactory, detect
 
 DetectorFactory.seed = 0  # Consistent results

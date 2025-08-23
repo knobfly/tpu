@@ -67,7 +67,7 @@ async def autofollow_scheduler(interval_s: int = 600):
         await batch_autofollow()
         await asyncio.sleep(interval_s)
 
-def start_autofollow_loop():
+async def start_autofollow_loop():
     """
     Start the autofollow scheduler in the background (call once at startup).
     """

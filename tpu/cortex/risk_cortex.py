@@ -1,6 +1,5 @@
 import logging
 from datetime import datetime, timedelta
-
 from defense.auto_rug_blacklist import is_blacklisted_token
 from defense.honeypot_scanner import is_honeypot
 from defense.liquidity_monitor import is_liquidity_removed
@@ -14,25 +13,29 @@ from utils.token_utils import get_lp_lock_status, has_contract_risks
 
 
 class RiskCortex:
+    def __init__(self, memory):
+        self.last_risk_map = {}
+        self.memory = memory
+
     # --- Supervisor Integration Hooks ---
     def receive_chart_signal(self, token_context: dict, chart_insights: dict):
         """
         Receive chart signals broadcast from supervisor or other modules.
         Can be used to update risk scoring or trigger analytics.
         """
-        pass
+        print(f"[RiskCortex] Received chart signal for {token_context.get('token_address')}: {chart_insights}")
 
     def update_persona_context(self, persona_context: dict):
         """
         Receive persona context updates for adaptive risk logic.
         """
-        pass
+        print(f"[RiskCortex] Persona context updated: {persona_context}")
 
     def receive_analytics_update(self, update: dict):
         """
         Receive analytics/state updates for unified decision-making.
         """
-        pass
+        print(f"[RiskCortex] Analytics update received: {update}")
 
     def contribute_features(self, token_context: dict) -> dict:
         """
@@ -43,9 +46,6 @@ class RiskCortex:
             "risk_score": insights.get("score", 0),
             "risk_flags": insights.get("flags", []),
         }
-    def __init__(self, memory):
-        self.last_risk_map = {}
-        self.memory = memory
 
     def assess_token_risk(self, token: str) -> dict:
         """
@@ -86,7 +86,6 @@ class RiskCortex:
             reasons.append("very_new")
             score += 1
 
-        # 🧱 Integrated Defense Modules
         if is_blacklisted_token(token):
             flags.append("blacklist_match")
             score += 10
